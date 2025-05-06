@@ -52,3 +52,44 @@ def create_quality_options_keyboard(
     ])
 
     return InlineKeyboardMarkup(keyboard)
+
+# --- Stats Keyboards ---
+
+def create_stats_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Creates the main menu keyboard for the /stats command."""
+    keyboard = [
+        [
+            InlineKeyboardButton("👤 User Statistics", callback_data="stats_menu:users"),
+            InlineKeyboardButton("💬 Interaction Stats", callback_data="stats_menu:interactions"),
+        ],
+        [
+            InlineKeyboardButton("📥 Download Statistics", callback_data="stats_menu:downloads"),
+            InlineKeyboardButton("📊 Overall Summary", callback_data="stats_show:summary"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def create_stats_submenu_keyboard(current_menu: str) -> InlineKeyboardMarkup:
+    """Creates a submenu keyboard with a back button."""
+    keyboard = [
+        # Submenu specific buttons will be added by the calling function
+        [InlineKeyboardButton("« Back to Main Menu", callback_data="stats_menu:main")]
+    ]
+    # Based on 'current_menu', add options
+    if current_menu == "users":
+         keyboard.insert(0, [InlineKeyboardButton("Total Users", callback_data="stats_show:users_total")])
+         keyboard.insert(1, [InlineKeyboardButton("Active Users (24h)", callback_data="stats_show:users_active_24h")])
+         keyboard.insert(2, [InlineKeyboardButton("Active Users (7d)", callback_data="stats_show:users_active_7d")])
+    elif current_menu == "interactions":
+         keyboard.insert(0, [InlineKeyboardButton("Total by Type", callback_data="stats_show:interactions_by_type")])
+         keyboard.insert(1, [InlineKeyboardButton("Interactions (24h)", callback_data="stats_show:interactions_24h")])
+    elif current_menu == "downloads":
+         keyboard.insert(0, [InlineKeyboardButton("Count by Status", callback_data="stats_show:downloads_by_status")])
+         keyboard.insert(1, [InlineKeyboardButton("Completed by Quality", callback_data="stats_show:downloads_by_quality")])
+         keyboard.insert(2, [InlineKeyboardButton("Top 5 URLs", callback_data="stats_show:downloads_top_urls")])
+
+    # Add more specific buttons here based on the menu context
+    # e.g., if current_menu == 'users':
+    #   keyboard.insert(0, [InlineKeyboardButton("Show User Count", callback_data="stats_show:user_count")])
+
+    return InlineKeyboardMarkup(keyboard)
