@@ -1,9 +1,14 @@
 import logging
 import logging.handlers
 import os
-import asyncio # Needed for running init_db
+import asyncio
 import httpx
-from telegram.ext import Application, Defaults
+import aiosqlite
+# --- Import typing hints ---
+from typing import Optional, Dict, Any
+# ---------------------------
+from telegram import Update
+from telegram.ext import Application, Defaults, ContextTypes
 from telegram.constants import ParseMode
 
 # Import necessary components from the bot package
@@ -11,83 +16,105 @@ from bot.config import (
     BOT_TOKEN,
     USE_LOCAL_API_SERVER,
     LOCAL_BOT_API_SERVER_URL,
-    LOG_DIR, # Import log config
+    LOG_DIR,
     LOG_FILE,
     LOG_MAX_BYTES,
-    LOG_BACKUP_COUNT
+    LOG_BACKUP_COUNT,
+    DATABASE_FILE
 )
-# --- Import the combined list from the handlers package ---
 from bot.handlers import all_handlers
-# --- Import database initializer ---
-from bot.database import init_db
+from bot.database import sync_init_db
 
-# --- Setup Logging ---
-# Remove basicConfig, configure root logger with handlers
-
-# Ensure log directory exists
+# --- Logging Setup (remains the same) ---
 os.makedirs(LOG_DIR, exist_ok=True)
-
-# Create formatter
 log_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-
-# Create console handler
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
-console_handler.setLevel(logging.INFO) # Or desired level for console
-
-# Create rotating file handler
+console_handler.setLevel(logging.INFO)
 file_handler = logging.handlers.RotatingFileHandler(
     LOG_FILE,
     maxBytes=LOG_MAX_BYTES,
     backupCount=LOG_BACKUP_COUNT,
-    encoding='utf-8' # Explicitly set encoding
+    encoding='utf-8'
 )
 file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO) # Or desired level for file
-
-# Get the root logger and add handlers
+file_handler.setLevel(logging.INFO)
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO) # Set lowest level for root logger
+root_logger.setLevel(logging.INFO)
 root_logger.addHandler(console_handler)
 root_logger.addHandler(file_handler)
-
-# Set higher levels for noisy libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram").setLevel(logging.WARNING) # Covers bot, ext, etc.
-# logging.getLogger("telegram.ext").setLevel(logging.WARNING) # Covered by above
-# logging.getLogger("telegram.bot").setLevel(logging.WARNING) # Covered by above
-logging.getLogger("aiosqlite").setLevel(logging.WARNING) # Keep aiosqlite quiet unless error
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 logging.getLogger("yt_dlp").setLevel(logging.WARNING)
-
-
-# Get our specific application logger
-logger = logging.getLogger(__name__) # Use __name__ for module-specific logger
+logger = logging.getLogger(__name__)
 # --- End Logging Setup ---
-
 
 # --- Define Timeouts ---
 DEFAULT_CONNECT_TIMEOUT = 10.0; DEFAULT_READ_TIMEOUT = 20.0; DEFAULT_WRITE_TIMEOUT = 30.0
 LOCAL_SERVER_CONNECT_TIMEOUT = 15.0; LOCAL_SERVER_READ_TIMEOUT = 300.0; LOCAL_SERVER_WRITE_TIMEOUT = 300.0
 
-async def setup_database():
-    """Initialize the database."""
-    await init_db()
+# --- Application Lifecycle Hooks ---
+async def post_application_init(application: Application) -> None:
+    """Create and store the persistent database connection."""
+    logger.info("Creating persistent database connection...")
+    try:
+        db_conn = await aiosqlite.connect(DATABASE_FILE)
+        db_conn.row_factory = aiosqlite.Row
+        try:
+            await db_conn.execute("PRAGMA journal_mode=WAL;")
+        except Exception as e:
+            logger.warning(f"Could not enable WAL mode for persistent connection: {e}")
+
+        application.bot_data["db_connection"] = db_conn
+        logger.info("Persistent database connection established and stored.")
+    except Exception as e:
+        logger.critical(f"Failed to create persistent database connection: {e}", exc_info=True)
+
+async def post_application_shutdown(application: Application) -> None:
+    """Close the persistent database connection."""
+    logger.info("Closing persistent database connection...")
+    db_conn = application.bot_data.get("db_connection")
+    if db_conn:
+        try:
+            await db_conn.close()
+            logger.info("Persistent database connection closed.")
+        except Exception as e:
+            logger.error(f"Error closing persistent database connection: {e}", exc_info=True)
+    else:
+        logger.warning("No persistent database connection found in bot_data to close.")
+# --- End Lifecycle Hooks ---
+
 
 def main() -> None:
     """Starts the bot."""
-    logger.info("Starting bot application...")
+    logger.info("Starting bot application setup...")
     if not BOT_TOKEN:
         logger.critical("Bot token not provided. Exiting.")
         return
 
-    # --- Initialize Database Asynchronously Before Building App ---
-    loop = asyncio.get_event_loop()
+    # --- Initialize Database Schema Synchronously ---
     try:
-        loop.run_until_complete(setup_database())
+        sync_init_db()
     except Exception as e:
-         logger.critical(f"Database initialization failed: {e}", exc_info=True)
-         return # Stop if DB fails
-    # --- End Database Initialization ---
+         logger.critical("Stopping bot due to database schema initialization failure.")
+         return
+    # --- End Synchronous Database Initialization ---
+
+    # --- Define Custom Context ---
+    class CustomContext(ContextTypes.DEFAULT_TYPE):
+        # Ensure bot_data type hint exists
+        bot_data: Dict[str, Any]
+
+        # __init__ with correct type hints
+        def __init__(self, application: Application, chat_id: Optional[int] = None, user_id: Optional[int] = None):
+              super().__init__(application=application, chat_id=chat_id, user_id=user_id)
+              # Ensure db_connection key exists, even if None initially
+              self.bot_data.setdefault("db_connection", None)
+
+    context_types = ContextTypes(context=CustomContext)
+    # --- End Custom Context ---
+
 
     defaults = Defaults(parse_mode=ParseMode.HTML)
 
@@ -108,9 +135,12 @@ def main() -> None:
         Application.builder()
         .token(BOT_TOKEN)
         .defaults(defaults)
+        .context_types(context_types) # Use custom context
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
         .write_timeout(write_timeout)
+        .post_init(post_application_init)
+        .post_shutdown(post_application_shutdown)
     )
 
     # Conditionally configure for Local Server
@@ -123,15 +153,15 @@ def main() -> None:
 
     application = builder.build()
 
-    # --- Register handlers using the combined list ---
+    # Register handlers
     logger.info(f"Registering {len(all_handlers)} handlers...")
     for handler in all_handlers:
         application.add_handler(handler)
-    # -----------------------------------------------
 
     logger.info("Starting bot polling...")
     application.run_polling()
     logger.info("Bot polling stopped.")
+
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,9 @@ import yt_dlp
 from typing import Dict, Optional, Tuple, Any, Callable, TYPE_CHECKING
 
 from bot.config import DOWNLOAD_DIR
-from bot.utils import cleanup_file
+# --- Corrected Import: from bot.helpers ---
+from bot.helpers import cleanup_file
+# -----------------------------------------
 # Import exceptions from the new location
 from bot.exceptions import DownloaderError
 

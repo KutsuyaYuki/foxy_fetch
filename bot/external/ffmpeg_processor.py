@@ -5,7 +5,9 @@ import shutil
 from typing import List
 
 from bot.exceptions import ConversionError
-from bot.utils import cleanup_file
+# --- Corrected Import: from bot.helpers ---
+from bot.helpers import cleanup_file
+# -----------------------------------------
 
 logger = logging.getLogger(__name__)
 
