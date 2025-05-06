@@ -20,19 +20,13 @@ TELEGRAM_API_ID: str | None = None
 TELEGRAM_API_HASH: str | None = None
 
 # --- Set Upload Limit based on Server Type ---
-# Standard limit for public servers
 DEFAULT_MAX_UPLOAD_MB = 50
-# Limit for local server (Telegram allows up to 2000MB)
 LOCAL_SERVER_MAX_UPLOAD_MB = 2000
 
 if USE_LOCAL_API_SERVER:
     TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
     TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
     MAX_UPLOAD_SIZE_BYTES = LOCAL_SERVER_MAX_UPLOAD_MB * 1024 * 1024
-    # Optional: Check if API ID/Hash are provided when local server is used
-    # if not TELEGRAM_API_ID or not TELEGRAM_API_HASH:
-    #     logger.warning("Local Bot API server URL is set, but API_ID or API_HASH are missing in .env")
-        # Depending on the local server setup, this might or might not be an issue.
     print(f"Using Local Bot API Server: {LOCAL_BOT_API_SERVER_URL}")
     print(f"Max Upload Size: {LOCAL_SERVER_MAX_UPLOAD_MB} MB")
 else:

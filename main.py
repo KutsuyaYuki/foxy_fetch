@@ -1,5 +1,5 @@
 import logging
-import httpx # Import httpx for Timeout object
+import httpx
 from telegram.ext import Application, Defaults
 from telegram.constants import ParseMode
 
@@ -9,7 +9,9 @@ from bot.config import (
     USE_LOCAL_API_SERVER,
     LOCAL_BOT_API_SERVER_URL
 )
-from bot.handlers import handlers
+# --- Import the combined list from the handlers package ---
+from bot.handlers import all_handlers
+# --------------------------------------------------------
 
 # Enable logging (keep existing setup)
 logging.basicConfig(
@@ -22,15 +24,8 @@ logging.getLogger("telegram.bot").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # --- Define Timeouts ---
-# Default timeouts (in seconds)
-DEFAULT_CONNECT_TIMEOUT = 10.0
-DEFAULT_READ_TIMEOUT = 20.0
-DEFAULT_WRITE_TIMEOUT = 30.0
-
-# Increased timeouts for potentially slow local server / large uploads
-LOCAL_SERVER_CONNECT_TIMEOUT = 15.0
-LOCAL_SERVER_READ_TIMEOUT = 300.0 # 5 minutes for reading response / upload
-LOCAL_SERVER_WRITE_TIMEOUT = 300.0 # 5 minutes for sending data / upload
+DEFAULT_CONNECT_TIMEOUT = 10.0; DEFAULT_READ_TIMEOUT = 20.0; DEFAULT_WRITE_TIMEOUT = 30.0
+LOCAL_SERVER_CONNECT_TIMEOUT = 15.0; LOCAL_SERVER_READ_TIMEOUT = 300.0; LOCAL_SERVER_WRITE_TIMEOUT = 300.0
 
 def main() -> None:
     """Starts the bot."""
@@ -40,20 +35,19 @@ def main() -> None:
 
     defaults = Defaults(parse_mode=ParseMode.HTML)
 
-    # Determine timeouts based on server type
+    # Determine timeouts
     if USE_LOCAL_API_SERVER:
-        connect_timeout = LOCAL_SERVER_CONNECT_TIMEOUT
-        read_timeout = LOCAL_SERVER_READ_TIMEOUT
-        write_timeout = LOCAL_SERVER_WRITE_TIMEOUT
-        logger.info(f"Using increased timeouts for local server: Connect={connect_timeout}s, Read={read_timeout}s, Write={write_timeout}s")
+        connect_timeout, read_timeout, write_timeout = (
+            LOCAL_SERVER_CONNECT_TIMEOUT, LOCAL_SERVER_READ_TIMEOUT, LOCAL_SERVER_WRITE_TIMEOUT
+        )
+        logger.info(f"Using increased timeouts: C={connect_timeout}s, R={read_timeout}s, W={write_timeout}s")
     else:
-        connect_timeout = DEFAULT_CONNECT_TIMEOUT
-        read_timeout = DEFAULT_READ_TIMEOUT
-        write_timeout = DEFAULT_WRITE_TIMEOUT
-        logger.info(f"Using default timeouts: Connect={connect_timeout}s, Read={read_timeout}s, Write={write_timeout}s")
+        connect_timeout, read_timeout, write_timeout = (
+            DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT
+        )
+        logger.info(f"Using default timeouts: C={connect_timeout}s, R={read_timeout}s, W={write_timeout}s")
 
-
-    # Create the Application Builder with timeouts
+    # Create the Application Builder
     builder = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -61,27 +55,24 @@ def main() -> None:
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
         .write_timeout(write_timeout)
-        # Note: For very fine-grained control, PTB also supports passing an httpx.Timeout object
-        # .http_version("1.1") # Keep default unless needed
-        # .pool_timeout(60.0) # Timeout for getting connection from pool
     )
 
-    # Conditionally configure for Local Bot API Server
+    # Conditionally configure for Local Server
     if USE_LOCAL_API_SERVER and LOCAL_BOT_API_SERVER_URL:
-        logger.info(f"Configuring Application to use Local Bot API Server: {LOCAL_BOT_API_SERVER_URL}")
+        logger.info(f"Using Local Bot API Server: {LOCAL_BOT_API_SERVER_URL}")
         builder = builder.base_url(f"{LOCAL_BOT_API_SERVER_URL}/bot{{token}}")
         builder = builder.base_file_url(f"{LOCAL_BOT_API_SERVER_URL}/file/bot{{token}}")
     else:
-        logger.info("Configuring Application to use Default Telegram Bot API Servers.")
+        logger.info("Using Default Telegram Bot API Servers.")
 
-    # Build the Application
     application = builder.build()
 
-    # Register handlers
-    for handler in handlers:
+    # --- Register handlers using the combined list ---
+    logger.info(f"Registering {len(all_handlers)} handlers...")
+    for handler in all_handlers:
         application.add_handler(handler)
+    # -----------------------------------------------
 
-    # Start the Bot
     logger.info("Starting bot polling...")
     application.run_polling()
 

@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-# format_filesize is not used for button labels anymore
+# Keep format_filesize if needed elsewhere, otherwise optional
 def format_filesize(size_bytes: Optional[int]) -> str:
     if not size_bytes: return ""
     if size_bytes < 1024: return f"{size_bytes} B"
@@ -11,10 +11,10 @@ def format_filesize(size_bytes: Optional[int]) -> str:
 
 def create_quality_options_keyboard(
     video_url: str,
-    quality_options: List[Dict[str, Any]],
-    best_quality_option: Dict[str, Any]
+    quality_options: List[Dict[str, Any]], # Expects list like [{'height': 720, 'selector': 'h720'}, ...]
+    best_quality_option: Dict[str, Any] # Expects dict like {'height': 1080, 'selector': 'best'}
     ) -> InlineKeyboardMarkup:
-    """Creates the inline keyboard with dynamic quality options and GIF option."""
+    """Creates the inline keyboard with dynamic quality options (WITHOUT sizes)."""
     keyboard: List[List[InlineKeyboardButton]] = []
 
     # Add "Best Available" option first
@@ -27,12 +27,12 @@ def create_quality_options_keyboard(
     ])
 
     # Add other available resolution options
-    processed_heights = {best_quality_option.get('height')}
+    processed_heights = {best_quality_option.get('height')} # Track added heights
     for option in quality_options:
         height = option.get('height')
         if not height or height in processed_heights:
             continue
-        label = f"🎬 {height}p"
+        label = f"🎬 {height}p" # Label is just the resolution
         keyboard.append([
             InlineKeyboardButton(
                 label,
@@ -46,10 +46,9 @@ def create_quality_options_keyboard(
         InlineKeyboardButton("🎵 Audio Only (m4a)", callback_data=f"q_audio:{video_url}")
     ])
 
-    # --- Add GIF option ---
+    # Add GIF option
     keyboard.append([
         InlineKeyboardButton("✨ Create GIF (Full Video)", callback_data=f"q_gif:{video_url}")
     ])
-    # ----------------------
 
     return InlineKeyboardMarkup(keyboard)
