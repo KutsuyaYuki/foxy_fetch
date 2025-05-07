@@ -19,7 +19,8 @@ from bot.config import (
     DATABASE_FILE
 )
 from bot.handlers import all_handlers
-from bot.database import DatabaseManager # Changed import
+from bot.database import DatabaseManager
+from bot.context import CustomContext # Import CustomContext from bot.context
 
 # --- Logging Setup (remains the same) ---
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -53,25 +54,7 @@ LOCAL_SERVER_CONNECT_TIMEOUT = 15.0
 LOCAL_SERVER_READ_TIMEOUT = 300.0
 LOCAL_SERVER_WRITE_TIMEOUT = 300.0
 
-class CustomContext(ContextTypes.DEFAULT_TYPE):
-    bot_data: Dict[str, Any]
-    _db_manager: Optional[DatabaseManager] = None # Store DatabaseManager instance
-
-    def __init__(self, application: Application, chat_id: Optional[int] = None, user_id: Optional[int] = None):
-        super().__init__(application=application, chat_id=chat_id, user_id=user_id)
-        # bot_data is managed by the Application, db_manager is specific to context instances if needed,
-        # but for a global manager, it's better in application.bot_data
-
-    @property
-    def db_manager(self) -> DatabaseManager:
-        """Provides access to the DatabaseManager instance stored in application.bot_data."""
-        manager = self.application.bot_data.get('db_manager')
-        if not isinstance(manager, DatabaseManager):
-            # This should not happen if post_init runs correctly
-            logger.critical("DatabaseManager not found in application.bot_data or is of incorrect type.")
-            raise RuntimeError("DatabaseManager not initialized correctly.")
-        return manager
-
+# CustomContext class definition is now removed from here
 
 async def post_application_init(application: Application) -> None:
     """Initialize and store the DatabaseManager."""
@@ -83,8 +66,6 @@ async def post_application_init(application: Application) -> None:
         logger.info("DatabaseManager initialized and connection established.")
     except Exception as e:
         logger.critical(f"Failed to initialize DatabaseManager or connect to database: {e}", exc_info=True)
-        # Depending on policy, you might want to raise the_exception to stop startup
-        # For now, we log critically and the bot might run without DB.
         # Consider `application.stop()` or raising if DB is essential.
 
 
@@ -110,10 +91,11 @@ def main() -> None:
 
     try:
         DatabaseManager.sync_init_db(DATABASE_FILE)
-    except Exception: # sync_init_db already logs critical and raises
+    except Exception:
          logger.critical("Stopping bot due to database schema initialization failure.")
          return
 
+    # Use the imported CustomContext for ContextTypes
     context_types = ContextTypes(context=CustomContext)
     defaults = Defaults(parse_mode=ParseMode.HTML)
 
@@ -132,7 +114,7 @@ def main() -> None:
         Application.builder()
         .token(BOT_TOKEN)
         .defaults(defaults)
-        .context_types(context_types)
+        .context_types(context_types) # Critical: use the new context_types
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
         .write_timeout(write_timeout)

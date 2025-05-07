@@ -11,7 +11,7 @@ from bot.helpers import is_valid_youtube_url
 from bot.services.youtube_service import YouTubeService
 from bot.exceptions import ServiceError
 from bot.presentation.keyboard import create_quality_options_keyboard
-from main import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext # Import CustomContext for type hinting
 
 logger = logging.getLogger(__name__)
 

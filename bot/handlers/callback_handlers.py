@@ -1,8 +1,9 @@
+# bot/handlers/callback_handlers.py
 import asyncio
 import logging
 import os
 import re
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, BinaryIO # Added BinaryIO
 from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -19,7 +20,7 @@ from bot.presentation.keyboard import (
     create_stats_main_menu_keyboard,
     create_stats_submenu_keyboard
 )
-from main import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext # Import CustomContext for type hinting
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,12 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
     await query.answer() # Answer callback quickly
 
     interaction_id: Optional[int] = None
+    final_media_path: Optional[str] = None
+    download_record_id: Optional[int] = None
+    media_file_handle: Optional[BinaryIO] = None # To store the opened file handle
+    url_to_process: Optional[str] = None # Initialize for use in except blocks if needed
+    status_updater: Optional[StatusUpdater] = None # Initialize for use in except blocks
+
     try:
         await db_manager.upsert_user(
             user_id=user.id, username=user.username,
@@ -99,16 +106,14 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         except (TelegramError, BadRequest): pass
         return
 
-    quality_selector, url_to_process = parsed_data
+    quality_selector, url_to_process = parsed_data # url_to_process is now defined
     chat_id = query.message.chat_id
-    status_message_id = query.message.message_id # This is the message with buttons
+    status_message_id = query.message.message_id
     bot = context.bot
-    loop = asyncio.get_running_loop() # Safe to get loop here
+    loop = asyncio.get_running_loop()
 
-    status_updater = StatusUpdater(bot, chat_id, status_message_id, loop)
-    youtube_service = YouTubeService(db_manager) # Pass db_manager
-    final_media_path: Optional[str] = None
-    download_record_id: Optional[int] = None
+    status_updater = StatusUpdater(bot, chat_id, status_message_id, loop) # status_updater is now defined
+    youtube_service = YouTubeService(db_manager)
 
     try:
         try:
@@ -121,12 +126,11 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             status_updater.update_status("❌ Internal error: Could not track download request.")
             return
 
-        if not download_record_id: # Should not happen if create_download_record is successful
+        if not download_record_id:
             logger.error(f"Download record ID is None after creation for user {user.id}, URL {url_to_process}")
             status_updater.update_status("❌ Internal error: Failed to track download ID.")
             return
 
-        # The service method now handles DB updates internally using the passed db_manager
         final_media_path, file_title, choice_description = await youtube_service.process_and_download(
             url=url_to_process, quality_selector=quality_selector,
             download_record_id=download_record_id,
@@ -134,12 +138,12 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             status_callback=status_updater.update_status
         )
 
-        status_updater.update_status("✅ Processing complete! Preparing upload...") # Final status before upload
+        status_updater.update_status("✅ Processing complete! Preparing upload...")
 
         if not final_media_path or not os.path.exists(final_media_path):
             err_msg = "Processed media file not found after download/conversion."
             await db_manager.update_download_status(download_record_id, 'failed', error_message=err_msg)
-            raise ServiceError(err_msg) # Will be caught by the handler's ServiceError block
+            raise ServiceError(err_msg)
 
         file_size = os.path.getsize(final_media_path)
         caption = f"{file_title}\n\nQuality: {choice_description}\nSource: {url_to_process}"
@@ -157,11 +161,10 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
 
         upload_method = None
         send_args: Dict[str, Any] = {"chat_id": chat_id, "caption": caption}
-        # Timeouts are handled by Application builder now, but can be overridden per call if needed
-        # gif_timeouts = {'read_timeout': 600.0, 'write_timeout': 600.0, 'connect_timeout': 30.0}
-
         base_filename = os.path.basename(final_media_path)
-        input_file_to_send = InputFile(open(final_media_path, 'rb'), filename=base_filename)
+
+        media_file_handle = open(final_media_path, 'rb') # Open the file and store the handle
+        input_file_to_send = InputFile(media_file_handle, filename=base_filename)
 
         if quality_selector == 'audio':
             upload_method = bot.send_audio
@@ -170,17 +173,13 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         elif quality_selector == 'gif':
             upload_method = bot.send_animation
             send_args['animation'] = input_file_to_send
-            # send_args.update(gif_timeouts) # If specific timeouts needed for GIF
         else: # Video
             upload_method = bot.send_video
             send_args['video'] = input_file_to_send
 
         if upload_method:
-            # No need to manage file opening/closing if InputFile handles it
             await upload_method(**send_args)
-            ((input_file_to_send.get_input_file()).close() # type: ignore[attr-defined]
-                if hasattr(input_file_to_send, 'get_input_file') and hasattr(input_file_to_send.get_input_file(), 'close') else None)
-
+            # The file handle (media_file_handle) will be closed in the finally block
             logger.info(f"Uploaded {final_media_path} user {user.id}. Record: {download_record_id}")
             await db_manager.update_download_status(download_record_id, 'completed', file_size=file_size)
         else:
@@ -189,38 +188,41 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             raise ServiceError(err_msg)
 
         try:
-            await asyncio.sleep(0.5) # Give client time to process incoming file
+            await asyncio.sleep(0.5)
             await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
             logger.info(f"Deleted status message {status_message_id} for user {user.id}")
         except TelegramError as del_e:
             logger.warning(f"Could not delete status message {status_message_id}: {del_e}")
-            status_updater.update_status("🎉 File sent successfully!") # Final update if delete fails
+            status_updater.update_status("🎉 File sent successfully!")
 
     except (DownloaderError, ConversionError, ServiceError, FileNotFoundError) as e:
         err_msg = f"❌ Failed: {e}"
-        logger.error(f"Handled error for {url_to_process}, user {user.id}: {e}", exc_info=True)
+        logger.error(f"Handled error for {url_to_process or 'N/A'}, user {user.id}: {e}", exc_info=True)
         if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=str(e))
-        status_updater.update_status(err_msg)
-    except TelegramError as te: # More specific Telegram errors
+        if status_updater: status_updater.update_status(err_msg)
+    except TelegramError as te:
         logger.error(f"TelegramError during callback for user {user.id}: {te}", exc_info=True)
         error_text = f"❌ Telegram Error: {te.message}"
         if isinstance(te, NetworkError) and "timed out" in str(te).lower():
-             # timeout = send_args.get('read_timeout', 'default system') # Timeout info not easily available here
              error_text = f"❌ Upload failed: Connection timed out."
         if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=f"TelegramError: {te.message}")
-        status_updater.update_status(error_text)
-    except Exception as e: # Generic catch-all
-        logger.exception(f"Unexpected error in download callback for {url_to_process}, user {user.id}")
+        if status_updater: status_updater.update_status(error_text)
+    except Exception as e:
+        logger.exception(f"Unexpected error in download callback for {url_to_process or 'N/A'}, user {user.id}")
         if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=f"Unexpected error: {type(e).__name__}")
-        status_updater.update_status("❌ An unexpected error occurred.")
+        if status_updater: status_updater.update_status("❌ An unexpected error occurred.")
     finally:
+        # Close the file handle if it was opened
+        if media_file_handle and not media_file_handle.closed:
+            try:
+                media_file_handle.close()
+                logger.debug(f"Closed media file handle for '{final_media_path if final_media_path else 'N/A'}'")
+            except Exception as fh_close_err:
+                logger.error(f"Error closing media file handle: {fh_close_err}", exc_info=True)
+
+        # Cleanup the actual file from disk
         if final_media_path and os.path.exists(final_media_path):
             cleanup_file(final_media_path)
-        # Ensure the file stream within InputFile is closed if it was opened
-        if 'input_file_to_send' in locals() and input_file_to_send:
-            stream = input_file_to_send.get_input_file() # type: ignore[attr-defined]
-            if stream and hasattr(stream, 'closed') and not stream.closed:
-                stream.close()
 
 async def handle_stats_callback(update: Update, context: CustomContext) -> None: # Use CustomContext
     """Handles button presses for the statistics interface (admin only)."""
@@ -364,7 +366,7 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 logger.warning(f"Unknown stats show action: {action}")
                 text += "Unknown statistics view."
                 keyboard = create_stats_main_menu_keyboard()
-        else: # Should not happen if parse_stats_callback is correct
+        else:
             logger.error(f"Unknown stats menu type: {menu_type}")
             text = "Error: Unknown statistics menu."
             keyboard = create_stats_main_menu_keyboard()
@@ -378,7 +380,7 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
         logger.exception(f"Error handling stats callback action '{action}' for admin {user.id}")
         try:
             await query.edit_message_text("❌ An error occurred while fetching statistics.")
-        except (TelegramError, BadRequest): pass # Original message might be gone
+        except (TelegramError, BadRequest): pass
 
 download_callback_handler = CallbackQueryHandler(handle_download_callback, pattern=r"^q_.*")
 stats_callback_handler = CallbackQueryHandler(handle_stats_callback, pattern=r"^stats_(menu|show):.*")

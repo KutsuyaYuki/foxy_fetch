@@ -4,7 +4,7 @@ from telegram.ext import ContextTypes, CommandHandler
 
 from bot.utils.decorators import admin_required
 from bot.presentation.keyboard import create_stats_main_menu_keyboard
-from main import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext # Import CustomContext for type hinting
 
 logger = logging.getLogger(__name__)
 
