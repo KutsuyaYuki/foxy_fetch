@@ -3,22 +3,21 @@
 import asyncio
 import logging
 import os
+import re # Added for re.fullmatch
 from typing import Optional, Tuple, Dict, Any, List
 from datetime import datetime, timedelta, timezone
 
-# --- Corrected Import: Add InlineKeyboardButton ---
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
-# -------------------------------------------------
 from telegram.ext import ContextTypes, CallbackQueryHandler
 from telegram.error import TelegramError, BadRequest, NetworkError
 from telegram.constants import ParseMode
-import aiosqlite # Import needed for type hint
+import aiosqlite
 
 from bot.config import MAX_UPLOAD_SIZE_BYTES, ADMIN_IDS
 from bot.services.youtube_service import YouTubeService
 from bot.exceptions import DownloaderError, ConversionError, ServiceError
 from bot.handlers.status_updater import StatusUpdater
-from bot.helpers import cleanup_file # Import from helpers
+from bot.helpers import cleanup_file
 import bot.database as db
 from bot.presentation.keyboard import (
     create_stats_main_menu_keyboard,
@@ -27,15 +26,39 @@ from bot.presentation.keyboard import (
 
 logger = logging.getLogger(__name__)
 
-# Parse helpers (remain the same)
-def parse_download_callback(data: str) -> Optional[Tuple[str, str]]:
+def parse_download_callback(data: str) -> Optional[Tuple[str, str]]: # Returns (quality_selector, final_url_to_process)
+    """
+    Parses callback data for download actions.
+    Expected format: "q_{selector}:{payload}"
+    Payload can be "id:{video_id}" or a full URL (fallback).
+    Returns a tuple of (quality_selector, url_to_process) or None if invalid.
+    """
     try:
-        action_part, url = data.split(":", 1)
-        if not action_part.startswith("q_"): return None
+        action_part, payload = data.split(":", 1)  # Split only on the first colon
+        if not action_part.startswith("q_"):
+            logger.warning(f"Callback data '{data}' is not a download action (no 'q_' prefix).")
+            return None
         quality_selector = action_part[2:]
-        return quality_selector, url
-    except (ValueError, AttributeError):
-        logger.warning(f"Could not parse download callback data: {data}")
+
+        if payload.startswith("id:"):
+            video_id = payload[3:]
+            # Basic validation for a YouTube video ID (11 characters, specific charset)
+            if not re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
+                logger.error(f"Invalid video ID format '{video_id}' in callback_data payload: '{payload}'")
+                return None
+            reconstructed_url = f"https://www.youtube.com/watch?v={video_id}"
+            logger.debug(f"Reconstructed URL '{reconstructed_url}' from ID '{video_id}' for quality '{quality_selector}'")
+            return quality_selector, reconstructed_url
+        else:
+            # Assume it's a full URL (legacy or fallback from keyboard creation)
+            if not (payload.startswith("http://") or payload.startswith("https://")):
+                logger.warning(f"Callback payload '{payload}' is not a recognized ID and doesn't look like a full URL. Proceeding anyway.")
+            return quality_selector, payload
+    except ValueError: # Not enough parts to split (e.g., "q_best" without URL/ID)
+        logger.warning(f"Could not split callback data into action and payload: '{data}'")
+        return None
+    except Exception as e: # Catch any other unexpected error during parsing
+        logger.error(f"Unexpected error parsing download callback data '{data}': {e}", exc_info=True)
         return None
 
 def parse_stats_callback(data: str) -> Optional[Tuple[str, str]]:
@@ -49,7 +72,6 @@ def parse_stats_callback(data: str) -> Optional[Tuple[str, str]]:
 
 
 async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handles button presses for quality/GIF options and logs interaction/download."""
     query = update.callback_query
     user = update.effective_user
     if not query or not query.message or not context.bot or not query.data or not user:
@@ -57,37 +79,25 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
         if query: await query.answer("Invalid request.", show_alert=True)
         return
 
-    # --- Get DB connection ---
     db_connection: Optional[aiosqlite.Connection] = context.bot_data.get('db_connection')
     if not db_connection:
         logger.error("Database connection not found in context for handle_download_callback.")
-        await query.answer("Sorry, an critical internal error occurred.", show_alert=True)
-        try:
-            await query.edit_message_text("❌ Internal Error (DB Missing). Please notify the administrator.")
-        except (TelegramError, BadRequest):
-              pass
+        await query.answer("Sorry, a critical internal error occurred.", show_alert=True)
+        try: await query.edit_message_text("❌ Internal Error (DB Missing). Please notify the administrator.")
+        except (TelegramError, BadRequest): pass
         return
-    # -----------------------
 
-    await query.answer() # Acknowledge button press
+    await query.answer()
 
     interaction_id: Optional[int] = None
     try:
-        # --- Pass connection to DB functions ---
         await db.upsert_user(
-            db_connection, # Pass connection
-            user_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name
+            db_connection, user_id=user.id, username=user.username,
+            first_name=user.first_name, last_name=user.last_name
         )
         interaction_id = await db.log_interaction(
-            db_connection, # Pass connection
-            user_id=user.id,
-            chat_id=query.message.chat_id,
-            message_id=query.message.message_id,
-            interaction_type='callback_query',
-            content=query.data
+            db_connection, user_id=user.id, chat_id=query.message.chat_id,
+            message_id=query.message.message_id, interaction_type='callback_query', content=query.data
         )
         logger.debug(f"Logged download callback interaction {interaction_id} from user {user.id}")
     except Exception as e:
@@ -95,11 +105,14 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
 
     parsed_data = parse_download_callback(query.data)
     if not parsed_data:
-        logger.error(f"Invalid download callback data format: {query.data} from user {user.id}")
-        await context.bot.edit_message_text("❌ Invalid request format.", chat_id=query.message.chat_id, message_id=query.message.message_id)
+        logger.error(f"Invalid download callback data format: {query.data} from user {user.id}. Could not be parsed.")
+        try:
+            await context.bot.edit_message_text("❌ Invalid request format. Could not understand selection.", chat_id=query.message.chat_id, message_id=query.message.message_id)
+        except (TelegramError, BadRequest):
+            logger.warning(f"Failed to edit message for invalid callback data format from user {user.id}")
         return
 
-    quality_selector, url = parsed_data
+    quality_selector, url_to_process = parsed_data # url_to_process is now the full or reconstructed URL
     chat_id = query.message.chat_id
     status_message_id = query.message.message_id
     bot = context.bot
@@ -112,56 +125,45 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
 
     try:
         try:
-            # --- Pass connection to DB function ---
             download_record_id = await db.create_download_record(
-                db_connection, # Pass connection
-                user_id=user.id,
-                youtube_url=url,
-                selected_quality=quality_selector,
-                interaction_id=interaction_id
+                db_connection, user_id=user.id, youtube_url=url_to_process, # Use url_to_process
+                selected_quality=quality_selector, interaction_id=interaction_id
             )
         except Exception as e:
-            logger.error(f"Failed to create download record for user {user.id}, URL {url}: {e}", exc_info=True)
+            logger.error(f"Failed to create download record for user {user.id}, URL {url_to_process}: {e}", exc_info=True)
             status_updater.update_status("❌ Internal error: Could not track download request.")
             return
 
         if not download_record_id:
-            logger.error(f"Failed to get download_record_id after creation for user {user.id}, URL {url}")
+            logger.error(f"Failed to get download_record_id after creation for user {user.id}, URL {url_to_process}")
             status_updater.update_status("❌ Internal error: Failed to track download ID.")
             return
 
-        # --- Pass connection to service layer ---
         final_media_path, file_title, choice_description = await youtube_service.process_and_download(
-            db_connection=db_connection, # Pass connection
-            url=url,
-            quality_selector=quality_selector,
-            download_record_id=download_record_id,
-            progress_callback=status_updater.update_progress,
-            status_callback=status_updater.update_status
+            db_connection=db_connection, url=url_to_process, # Use url_to_process
+            quality_selector=quality_selector, download_record_id=download_record_id,
+            progress_callback=status_updater.update_progress, status_callback=status_updater.update_status
         )
 
         status_updater.update_status("✅ Processing complete! Preparing upload...")
 
         if not final_media_path or not os.path.exists(final_media_path):
              err_msg = "Processed media file not found after download/conversion."
-             # Pass connection
              await db.update_download_status(db_connection, download_record_id, 'failed', error_message=err_msg)
              raise ServiceError(err_msg)
 
         file_size = os.path.getsize(final_media_path)
         base_filename = os.path.basename(final_media_path)
-        caption = f"{file_title}\n\nQuality: {choice_description}\nSource: {url}"
+        caption = f"{file_title}\n\nQuality: {choice_description}\nSource: {url_to_process}" # Use url_to_process
 
         if file_size > MAX_UPLOAD_SIZE_BYTES:
             max_mb = MAX_UPLOAD_SIZE_BYTES / (1024*1024)
             size_error_text = f"❌ File too large ({file_size / (1024*1024):.2f} MB). Max: {max_mb:.0f} MB."
             logger.warning(f"File {final_media_path} too large ({file_size} bytes) for user {user.id}. Record ID: {download_record_id}")
-            # Pass connection
             await db.update_download_status(db_connection, download_record_id, 'failed', error_message=f"File too large ({file_size} bytes)", file_size=file_size)
             status_updater.update_status(size_error_text)
             return
 
-        # Pass connection
         await db.update_download_status(db_connection, download_record_id, 'upload_started')
         status_updater.update_status("⬆️ Uploading to Telegram...")
 
@@ -185,11 +187,9 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
                 elif 'animation' in send_args: send_args['animation'] = input_file
                 await upload_method(**send_args)
             logger.info(f"Successfully uploaded {final_media_path} for user {user.id}. Record ID: {download_record_id}")
-            # Pass connection
             await db.update_download_status(db_connection, download_record_id, 'completed', file_size=file_size)
         else:
              err_msg = f"No upload method determined for selector {quality_selector}."
-             # Pass connection
              await db.update_download_status(db_connection, download_record_id, 'failed', error_message=err_msg)
              raise ServiceError(err_msg)
 
@@ -203,7 +203,7 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
 
     except (DownloaderError, ConversionError, ServiceError, FileNotFoundError) as e:
         err_msg = f"❌ Failed: {e}"
-        logger.error(f"Handled error during callback processing for {url}, selector {quality_selector}, user {user.id}: {e}", exc_info=True)
+        logger.error(f"Handled error during callback processing for {url_to_process}, selector {quality_selector}, user {user.id}: {e}", exc_info=True)
         if download_record_id: await db.update_download_status(db_connection, download_record_id, 'failed', error_message=str(e))
         status_updater.update_status(err_msg)
     except TelegramError as e:
@@ -215,7 +215,7 @@ async def handle_download_callback(update: Update, context: ContextTypes.DEFAULT
         if download_record_id: await db.update_download_status(db_connection, download_record_id, 'failed', error_message=f"TelegramError: {e.message}")
         status_updater.update_status(error_text)
     except Exception as e:
-        logger.exception(f"Unexpected error handling callback for {url}, selector {quality_selector}, user {user.id}")
+        logger.exception(f"Unexpected error handling callback for {url_to_process}, selector {quality_selector}, user {user.id}")
         if download_record_id: await db.update_download_status(db_connection, download_record_id, 'failed', error_message=f"Unexpected error: {type(e).__name__}")
         status_updater.update_status("❌ An unexpected error occurred.")
     finally:
@@ -232,17 +232,13 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if query: await query.answer("Invalid request.", show_alert=True)
         return
 
-    # --- Get DB connection ---
     db_connection: Optional[aiosqlite.Connection] = context.bot_data.get('db_connection')
     if not db_connection:
         logger.error("Database connection not found in context for handle_stats_callback.")
         await query.answer("Sorry, a critical internal error occurred.", show_alert=True)
-        try:
-            await query.edit_message_text("❌ Internal Error (DB Missing). Please notify the administrator.")
-        except (TelegramError, BadRequest):
-            pass # Ignore if editing fails
+        try: await query.edit_message_text("❌ Internal Error (DB Missing). Please notify the administrator.")
+        except (TelegramError, BadRequest): pass
         return
-    # -----------------------
 
     if user.id not in ADMIN_IDS:
         logger.warning(f"Non-admin user {user.id} tried to use stats callback: {query.data}")
@@ -252,14 +248,9 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     try:
-        # --- Pass connection to DB function ---
         await db.log_interaction(
-            db_connection, # Pass connection
-            user_id=user.id,
-            chat_id=query.message.chat_id,
-            message_id=query.message.message_id,
-            interaction_type='callback_query',
-            content=query.data
+            db_connection, user_id=user.id, chat_id=query.message.chat_id,
+            message_id=query.message.message_id, interaction_type='callback_query', content=query.data
         )
     except Exception as e:
         logger.error(f"Database error logging stats callback for admin {user.id}: {e}", exc_info=True)
@@ -314,7 +305,6 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 text += f"- Completed Downloads: `{completed_downloads}` ✅\n"
                 text += f"- Failed Downloads: `{failed_downloads}` ❌\n"
                 text += f"- Success Rate: `{success_rate:.2f}%`\n"
-                # Correctly create the back button using imported classes
                 keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Main Menu", callback_data="stats_menu:main")]])
 
             elif action == "users_total":
@@ -334,8 +324,8 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 counts = await db.get_interaction_count_by_type(db_connection)
                 text += "💬 *Interactions by Type (All Time)*\n"
                 if counts:
-                    for type_name, count in sorted(counts.items()):
-                        text += f"- {type_name.replace('_', ' ').title()}: `{count}`\n"
+                    for type_name, count_val in sorted(counts.items()): # Renamed count to count_val
+                        text += f"- {type_name.replace('_', ' ').title()}: `{count_val}`\n"
                 else:
                     text += "_No interactions recorded._\n"
                 keyboard = create_stats_submenu_keyboard("interactions")
@@ -343,8 +333,8 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 counts = await db.get_interaction_count_by_type(db_connection, since_iso_timestamp=one_day_ago_iso)
                 text += "💬 *Interactions by Type (Last 24h)*\n"
                 if counts:
-                    for type_name, count in sorted(counts.items()):
-                        text += f"- {type_name.replace('_', ' ').title()}: `{count}`\n"
+                    for type_name, count_val in sorted(counts.items()): # Renamed count to count_val
+                        text += f"- {type_name.replace('_', ' ').title()}: `{count_val}`\n"
                 else:
                     text += "_No interactions in the last 24 hours._\n"
                 keyboard = create_stats_submenu_keyboard("interactions")
@@ -353,8 +343,8 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 counts = await db.get_download_status_counts(db_connection)
                 text += "📥 *Downloads by Status (All Time)*\n"
                 if counts:
-                    for status_name, count in sorted(counts.items()):
-                        text += f"- {status_name.title()}: `{count}`\n"
+                    for status_name, count_val in sorted(counts.items()): # Renamed count to count_val
+                        text += f"- {status_name.title()}: `{count_val}`\n"
                 else:
                     text += "_No downloads recorded._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
@@ -362,8 +352,8 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 counts = await db.get_downloads_by_quality_summary(db_connection)
                 text += "📥 *Completed Downloads by Quality*\n"
                 if counts:
-                    for quality_name, count in sorted(counts.items()):
-                        text += f"- {quality_name.replace('h', '').upper() if quality_name.startswith('h') else quality_name.title()}: `{count}`\n"
+                    for quality_name, count_val in sorted(counts.items()): # Renamed count to count_val
+                        text += f"- {quality_name.replace('h', '').upper() if quality_name.startswith('h') else quality_name.title()}: `{count_val}`\n"
                 else:
                     text += "_No completed downloads recorded._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
@@ -371,9 +361,9 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 urls = await db.get_top_requested_urls(db_connection, limit=5)
                 text += "📥 *Top 5 Requested URLs*\n"
                 if urls:
-                    for i, (url_item, count) in enumerate(urls):
+                    for i, (url_item, count_val) in enumerate(urls): # Renamed count to count_val
                         display_url = url_item[:60] + '...' if len(url_item) > 60 else url_item
-                        text += f"{i+1}. `{display_url}` (Count: `{count}`)\n"
+                        text += f"{i+1}. `{display_url}` (Count: `{count_val}`)\n"
                 else:
                     text += "_No URLs requested yet._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
@@ -386,7 +376,6 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
             text = "Error: Unknown statistics menu."
             keyboard = create_stats_main_menu_keyboard()
 
-        # Edit the message
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
     except Exception as e:
@@ -396,9 +385,6 @@ async def handle_stats_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except (TelegramError, BadRequest):
              pass
 
-# --- Handler Registration ---
 download_callback_handler = CallbackQueryHandler(handle_download_callback, pattern=r"^q_.*")
 stats_callback_handler = CallbackQueryHandler(handle_stats_callback, pattern=r"^stats_(menu|show):.*")
-
-# List of callback handlers to register
 callback_handlers = [download_callback_handler, stats_callback_handler]
