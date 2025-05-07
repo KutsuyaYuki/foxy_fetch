@@ -2,16 +2,12 @@ import logging
 import logging.handlers
 import os
 import asyncio
-import httpx
-import aiosqlite
-# --- Import typing hints ---
 from typing import Optional, Dict, Any
-# ---------------------------
+
 from telegram import Update
 from telegram.ext import Application, Defaults, ContextTypes
 from telegram.constants import ParseMode
 
-# Import necessary components from the bot package
 from bot.config import (
     BOT_TOKEN,
     USE_LOCAL_API_SERVER,
@@ -23,7 +19,7 @@ from bot.config import (
     DATABASE_FILE
 )
 from bot.handlers import all_handlers
-from bot.database import sync_init_db
+from bot.database import DatabaseManager # Changed import
 
 # --- Logging Setup (remains the same) ---
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -50,75 +46,77 @@ logging.getLogger("yt_dlp").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 # --- End Logging Setup ---
 
-# --- Define Timeouts ---
-DEFAULT_CONNECT_TIMEOUT = 10.0; DEFAULT_READ_TIMEOUT = 20.0; DEFAULT_WRITE_TIMEOUT = 30.0
-LOCAL_SERVER_CONNECT_TIMEOUT = 15.0; LOCAL_SERVER_READ_TIMEOUT = 300.0; LOCAL_SERVER_WRITE_TIMEOUT = 300.0
+DEFAULT_CONNECT_TIMEOUT = 10.0
+DEFAULT_READ_TIMEOUT = 20.0
+DEFAULT_WRITE_TIMEOUT = 30.0
+LOCAL_SERVER_CONNECT_TIMEOUT = 15.0
+LOCAL_SERVER_READ_TIMEOUT = 300.0
+LOCAL_SERVER_WRITE_TIMEOUT = 300.0
 
-# --- Application Lifecycle Hooks ---
+class CustomContext(ContextTypes.DEFAULT_TYPE):
+    bot_data: Dict[str, Any]
+    _db_manager: Optional[DatabaseManager] = None # Store DatabaseManager instance
+
+    def __init__(self, application: Application, chat_id: Optional[int] = None, user_id: Optional[int] = None):
+        super().__init__(application=application, chat_id=chat_id, user_id=user_id)
+        # bot_data is managed by the Application, db_manager is specific to context instances if needed,
+        # but for a global manager, it's better in application.bot_data
+
+    @property
+    def db_manager(self) -> DatabaseManager:
+        """Provides access to the DatabaseManager instance stored in application.bot_data."""
+        manager = self.application.bot_data.get('db_manager')
+        if not isinstance(manager, DatabaseManager):
+            # This should not happen if post_init runs correctly
+            logger.critical("DatabaseManager not found in application.bot_data or is of incorrect type.")
+            raise RuntimeError("DatabaseManager not initialized correctly.")
+        return manager
+
+
 async def post_application_init(application: Application) -> None:
-    """Create and store the persistent database connection."""
-    logger.info("Creating persistent database connection...")
+    """Initialize and store the DatabaseManager."""
+    logger.info("Initializing DatabaseManager...")
+    db_manager = DatabaseManager(DATABASE_FILE)
     try:
-        db_conn = await aiosqlite.connect(DATABASE_FILE)
-        db_conn.row_factory = aiosqlite.Row
-        try:
-            await db_conn.execute("PRAGMA journal_mode=WAL;")
-        except Exception as e:
-            logger.warning(f"Could not enable WAL mode for persistent connection: {e}")
-
-        application.bot_data["db_connection"] = db_conn
-        logger.info("Persistent database connection established and stored.")
+        await db_manager.connect()
+        application.bot_data["db_manager"] = db_manager
+        logger.info("DatabaseManager initialized and connection established.")
     except Exception as e:
-        logger.critical(f"Failed to create persistent database connection: {e}", exc_info=True)
+        logger.critical(f"Failed to initialize DatabaseManager or connect to database: {e}", exc_info=True)
+        # Depending on policy, you might want to raise the_exception to stop startup
+        # For now, we log critically and the bot might run without DB.
+        # Consider `application.stop()` or raising if DB is essential.
+
 
 async def post_application_shutdown(application: Application) -> None:
-    """Close the persistent database connection."""
-    logger.info("Closing persistent database connection...")
-    db_conn = application.bot_data.get("db_connection")
-    if db_conn:
+    """Close the database connection via DatabaseManager."""
+    logger.info("Shutting down DatabaseManager...")
+    db_manager = application.bot_data.get("db_manager")
+    if isinstance(db_manager, DatabaseManager):
         try:
-            await db_conn.close()
-            logger.info("Persistent database connection closed.")
+            await db_manager.close()
+            logger.info("DatabaseManager connection closed.")
         except Exception as e:
-            logger.error(f"Error closing persistent database connection: {e}", exc_info=True)
+            logger.error(f"Error closing DatabaseManager connection: {e}", exc_info=True)
     else:
-        logger.warning("No persistent database connection found in bot_data to close.")
-# --- End Lifecycle Hooks ---
+        logger.warning("No DatabaseManager found in bot_data to close or incorrect type.")
 
 
 def main() -> None:
-    """Starts the bot."""
     logger.info("Starting bot application setup...")
     if not BOT_TOKEN:
         logger.critical("Bot token not provided. Exiting.")
         return
 
-    # --- Initialize Database Schema Synchronously ---
     try:
-        sync_init_db()
-    except Exception as e:
+        DatabaseManager.sync_init_db(DATABASE_FILE)
+    except Exception: # sync_init_db already logs critical and raises
          logger.critical("Stopping bot due to database schema initialization failure.")
          return
-    # --- End Synchronous Database Initialization ---
-
-    # --- Define Custom Context ---
-    class CustomContext(ContextTypes.DEFAULT_TYPE):
-        # Ensure bot_data type hint exists
-        bot_data: Dict[str, Any]
-
-        # __init__ with correct type hints
-        def __init__(self, application: Application, chat_id: Optional[int] = None, user_id: Optional[int] = None):
-              super().__init__(application=application, chat_id=chat_id, user_id=user_id)
-              # Ensure db_connection key exists, even if None initially
-              self.bot_data.setdefault("db_connection", None)
 
     context_types = ContextTypes(context=CustomContext)
-    # --- End Custom Context ---
-
-
     defaults = Defaults(parse_mode=ParseMode.HTML)
 
-    # Determine timeouts
     if USE_LOCAL_API_SERVER:
         connect_timeout, read_timeout, write_timeout = (
             LOCAL_SERVER_CONNECT_TIMEOUT, LOCAL_SERVER_READ_TIMEOUT, LOCAL_SERVER_WRITE_TIMEOUT
@@ -130,12 +128,11 @@ def main() -> None:
         )
         logger.info(f"Using default timeouts: C={connect_timeout}s, R={read_timeout}s, W={write_timeout}s")
 
-    # Create the Application Builder
     builder = (
         Application.builder()
         .token(BOT_TOKEN)
         .defaults(defaults)
-        .context_types(context_types) # Use custom context
+        .context_types(context_types)
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
         .write_timeout(write_timeout)
@@ -143,7 +140,6 @@ def main() -> None:
         .post_shutdown(post_application_shutdown)
     )
 
-    # Conditionally configure for Local Server
     if USE_LOCAL_API_SERVER and LOCAL_BOT_API_SERVER_URL:
         logger.info(f"Using Local Bot API Server: {LOCAL_BOT_API_SERVER_URL}")
         builder = builder.base_url(f"{LOCAL_BOT_API_SERVER_URL}/bot{{token}}")
@@ -153,14 +149,17 @@ def main() -> None:
 
     application = builder.build()
 
-    # Register handlers
     logger.info(f"Registering {len(all_handlers)} handlers...")
     for handler in all_handlers:
         application.add_handler(handler)
 
     logger.info("Starting bot polling...")
-    application.run_polling()
-    logger.info("Bot polling stopped.")
+    try:
+        application.run_polling()
+    except Exception as e:
+        logger.critical(f"Application crashed: {e}", exc_info=True)
+    finally:
+        logger.info("Bot polling stopped.")
 
 
 if __name__ == "__main__":
