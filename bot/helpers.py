@@ -3,17 +3,30 @@ import os
 import re
 import logging
 from urllib.parse import urlparse
-from typing import Optional # Added Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-YOUTUBE_REGEX = re.compile(
-    r"^(https?://)?(www\.)?(youtube\.com|youtu\.?be)/.+$"
+# Expanded regex to match various video platforms
+SUPPORTED_PLATFORMS_REGEX = re.compile(
+    r"^(https?://)?(www\.)?"
+    r"(youtube\.com|youtu\.?be|"  # YouTube
+    r"tiktok\.com|"  # TikTok
+    r"twitter\.com|x\.com|"  # Twitter/X
+    r"instagram\.com|"  # Instagram
+    r"facebook\.com|fb\.watch|"  # Facebook
+    r"vimeo\.com|"  # Vimeo
+    r"dailymotion\.com|"  # Dailymotion
+    r"twitch\.tv|"  # Twitch
+    r"reddit\.com|"  # Reddit
+    r"streamable\.com|"  # Streamable
+    r"imgur\.com)"  # Imgur
+    r"/.+$"
 )
 
-def is_valid_youtube_url(url: str) -> bool:
-    """Checks if the provided string is a valid YouTube URL."""
-    return bool(YOUTUBE_REGEX.match(url))
+def is_valid_video_url(url: str) -> bool:
+    """Checks if the provided string is a valid video URL from supported platforms."""
+    return bool(SUPPORTED_PLATFORMS_REGEX.match(url))
 
 def extract_youtube_video_id(url: str) -> Optional[str]:
     """
@@ -37,6 +50,38 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
         if match:
             return match.group(1) # Return the first capturing group (the video ID)
     return None
+
+def get_platform_name(url: str) -> str:
+    """
+    Determines the platform name from a URL.
+    Returns a user-friendly platform name.
+    """
+    url_lower = url.lower()
+
+    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+        return 'YouTube'
+    elif 'tiktok.com' in url_lower:
+        return 'TikTok'
+    elif 'twitter.com' in url_lower or 'x.com' in url_lower:
+        return 'Twitter/X'
+    elif 'instagram.com' in url_lower:
+        return 'Instagram'
+    elif 'facebook.com' in url_lower or 'fb.watch' in url_lower:
+        return 'Facebook'
+    elif 'vimeo.com' in url_lower:
+        return 'Vimeo'
+    elif 'dailymotion.com' in url_lower:
+        return 'Dailymotion'
+    elif 'twitch.tv' in url_lower:
+        return 'Twitch'
+    elif 'reddit.com' in url_lower:
+        return 'Reddit'
+    elif 'streamable.com' in url_lower:
+        return 'Streamable'
+    elif 'imgur.com' in url_lower:
+        return 'Imgur'
+    else:
+        return 'Video Platform'
 
 def cleanup_file(file_path: str) -> None:
     """Attempts to delete a file and logs errors."""

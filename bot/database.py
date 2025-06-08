@@ -40,11 +40,9 @@ class DatabaseManager:
     async def _get_connection(self) -> aiosqlite.Connection:
         """Ensures the connection is active and returns it."""
         if self._connection is None or self._connection._running is False: # type: ignore[attr-defined]
-            # This case should ideally be handled by application lifecycle,
-            # but as a fallback, we can try to reconnect.
             logger.warning("Attempting to re-establish lost database connection.")
             await self.connect()
-        if self._connection is None: # Still None after attempt
+        if self._connection is None:
             raise ConnectionError("Database connection is not available.")
         return self._connection
 
@@ -85,15 +83,16 @@ class DatabaseManager:
                         FOREIGN KEY (user_id) REFERENCES users (user_id)
                     );
                 """)
-                # Create downloads table
+                # Create downloads table - Updated to use generic 'video_url' instead of 'youtube_url'
                 db.execute("""
                     CREATE TABLE IF NOT EXISTS downloads (
                         download_id INTEGER PRIMARY KEY AUTOINCREMENT,
                         interaction_id INTEGER,
                         user_id INTEGER NOT NULL,
-                        youtube_url TEXT NOT NULL,
+                        video_url TEXT NOT NULL,
                         selected_quality TEXT NOT NULL,
                         video_title TEXT,
+                        platform TEXT,
                         status TEXT NOT NULL CHECK(status IN ('requested', 'info_fetched', 'download_started', 'downloading', 'conversion_started', 'converting', 'upload_started', 'completed', 'failed')),
                         status_timestamp TEXT NOT NULL,
                         error_message TEXT,
@@ -104,6 +103,7 @@ class DatabaseManager:
                 """)
                 db.execute("CREATE INDEX IF NOT EXISTS idx_downloads_user_id ON downloads (user_id);")
                 db.execute("CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads (status);")
+                db.execute("CREATE INDEX IF NOT EXISTS idx_downloads_platform ON downloads (platform);")
 
             logger.info("Synchronous database schema initialization complete.")
         except sqlite3.Error as e:
@@ -155,8 +155,9 @@ class DatabaseManager:
     async def create_download_record(
         self,
         user_id: int,
-        youtube_url: str,
+        video_url: str,
         selected_quality: str,
+        platform: Optional[str] = None,
         interaction_id: Optional[int] = None,
     ) -> Optional[int]:
         """Creates a download record."""
@@ -164,12 +165,12 @@ class DatabaseManager:
         download_id = None
         db = await self._get_connection()
         cursor = await db.execute("""
-            INSERT INTO downloads (interaction_id, user_id, youtube_url, selected_quality, status, status_timestamp)
-            VALUES (?, ?, ?, ?, 'requested', ?)
-        """, (interaction_id, user_id, youtube_url, selected_quality, now))
+            INSERT INTO downloads (interaction_id, user_id, video_url, selected_quality, platform, status, status_timestamp)
+            VALUES (?, ?, ?, ?, ?, 'requested', ?)
+        """, (interaction_id, user_id, video_url, selected_quality, platform, now))
         await db.commit()
         download_id = cursor.lastrowid
-        logger.info(f"Created download record (ID: {download_id}): User={user_id}, URL={youtube_url}, Quality={selected_quality}")
+        logger.info(f"Created download record (ID: {download_id}): User={user_id}, URL={video_url}, Quality={selected_quality}, Platform={platform}")
         return download_id
 
     async def update_download_status(
@@ -220,7 +221,7 @@ class DatabaseManager:
         query += " GROUP BY interaction_type"
         counts = {}
         db = await self._get_connection()
-        async with db.execute(query, params) as cursor: # type: ignore[union-attr] # aiosqlite.Connection.execute returns a Cursor
+        async with db.execute(query, params) as cursor: # type: ignore[union-attr]
             async for row in cursor:
                 counts[row['interaction_type']] = row['count']
         return counts
@@ -243,11 +244,22 @@ class DatabaseManager:
                 counts[row['selected_quality']] = row['count']
         return counts
 
+    async def get_downloads_by_platform_summary(self) -> Dict[str, int]:
+        """Gets download counts by platform."""
+        query = "SELECT platform, COUNT(*) as count FROM downloads WHERE status = 'completed' GROUP BY platform"
+        counts = {}
+        db = await self._get_connection()
+        async with db.execute(query) as cursor: # type: ignore[union-attr]
+            async for row in cursor:
+                platform = row['platform'] or 'Unknown'
+                counts[platform] = row['count']
+        return counts
+
     async def get_top_requested_urls(self, limit: int = 5) -> List[Tuple[str, int]]:
         query = """
-            SELECT youtube_url, COUNT(*) as count
+            SELECT video_url, COUNT(*) as count
             FROM downloads
-            GROUP BY youtube_url
+            GROUP BY video_url
             ORDER BY count DESC
             LIMIT ?
         """
@@ -255,5 +267,5 @@ class DatabaseManager:
         db = await self._get_connection()
         async with db.execute(query, (limit,)) as cursor: # type: ignore[union-attr]
             async for row in cursor:
-                urls.append((row['youtube_url'], row['count']))
+                urls.append((row['video_url'], row['count']))
         return urls

@@ -7,23 +7,30 @@ from telegram import Update, Message
 from telegram.constants import ParseMode
 from telegram.ext import MessageHandler, filters
 
-from bot.helpers import is_valid_youtube_url
+from bot.helpers import is_valid_video_url, get_platform_name
 from bot.services.youtube_service import YouTubeService
 from bot.exceptions import ServiceError
 from bot.presentation.keyboard import create_quality_options_keyboard
-from bot.context import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext
 
 logger = logging.getLogger(__name__)
 
-YOUTUBE_URL_IN_TEXT_REGEX = re.compile(r"(https?://)?(www\.)?(youtube\.com|youtu\.?be)/[\w\-/?=&#%]+")
+# Updated regex to match various video platforms
+VIDEO_URL_IN_TEXT_REGEX = re.compile(
+    r"(https?://)?(www\.)?"
+    r"(youtube\.com|youtu\.?be|tiktok\.com|twitter\.com|x\.com|instagram\.com|"
+    r"facebook\.com|fb\.watch|vimeo\.com|dailymotion\.com|twitch\.tv|"
+    r"reddit\.com|streamable\.com|imgur\.com)"
+    r"/[\w\-/?=&#%@.]+", re.IGNORECASE
+)
 
-def find_youtube_url_in_message(message: Optional[Message]) -> Optional[str]:
+def find_video_url_in_message(message: Optional[Message]) -> Optional[str]:
     if not message: return None
     text_to_check = message.text or message.caption or ""
-    match = YOUTUBE_URL_IN_TEXT_REGEX.search(text_to_check)
+    match = VIDEO_URL_IN_TEXT_REGEX.search(text_to_check)
     if match:
         url = match.group(0)
-        return url if is_valid_youtube_url(url) else None
+        return url if is_valid_video_url(url) else None
     return None
 
 def process_formats(formats: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -33,7 +40,7 @@ def process_formats(formats: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]]
     best_overall_format_data: Optional[Dict[str, Any]] = None
     best_height = 0
 
-    for f_format in formats: # Renamed f to f_format
+    for f_format in formats:
         if f_format.get('vcodec') == 'none' or not f_format.get('height'):
             continue
         height: int = f_format.get('height', 0)
@@ -74,7 +81,7 @@ def process_formats(formats: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]]
     return sorted_options, best_option_for_keyboard
 
 
-async def handle_message(update: Update, context: CustomContext) -> None: # Use CustomContext
+async def handle_message(update: Update, context: CustomContext) -> None:
     """Handles messages, detects URLs, fetches info, logs, and sends options."""
     if not update.message or not context.bot:
         logger.warning("Message handler received update without message or bot.")
@@ -86,23 +93,24 @@ async def handle_message(update: Update, context: CustomContext) -> None: # Use 
         logger.warning("Cannot handle message: effective_user is None.")
         return
 
-    db_manager = context.db_manager # Access DatabaseManager via context
+    db_manager = context.db_manager
 
     url_to_process: Optional[str] = None
     interaction_type = 'url_message'
 
     if trigger_message.reply_to_message:
-        url_to_process = find_youtube_url_in_message(trigger_message.reply_to_message)
+        url_to_process = find_video_url_in_message(trigger_message.reply_to_message)
         if url_to_process:
             interaction_type = 'reply_message'
     if not url_to_process:
-        url_to_process = find_youtube_url_in_message(trigger_message)
+        url_to_process = find_video_url_in_message(trigger_message)
 
     if not url_to_process:
-        logger.debug(f"No valid YouTube URL found in message {trigger_message.message_id} from user {user.id}")
+        logger.debug(f"No valid video URL found in message {trigger_message.message_id} from user {user.id}")
         return
 
-    logger.info(f"Found URL: {url_to_process} in {interaction_type} from user {user.id}. Processing request...")
+    platform_name = get_platform_name(url_to_process)
+    logger.info(f"Found {platform_name} URL: {url_to_process} in {interaction_type} from user {user.id}. Processing request...")
 
     try:
         await db_manager.upsert_user(
@@ -111,7 +119,7 @@ async def handle_message(update: Update, context: CustomContext) -> None: # Use 
             first_name=user.first_name,
             last_name=user.last_name
         )
-        await db_manager.log_interaction( # Log interaction_id if needed later
+        await db_manager.log_interaction(
             user_id=user.id,
             chat_id=trigger_message.chat_id,
             message_id=trigger_message.message_id,
@@ -124,22 +132,21 @@ async def handle_message(update: Update, context: CustomContext) -> None: # Use 
         return
     except Exception as e:
         logger.error(f"Database error logging URL interaction for user {user.id}: {e}", exc_info=True)
-        # Non-critical, proceed with functionality if possible
 
     status_message: Optional[Message] = None
     chat_id = trigger_message.chat_id
-    youtube_service = YouTubeService(db_manager) # Pass db_manager to service
+    youtube_service = YouTubeService(db_manager)
 
     try:
-        status_message = await context.bot.send_message(chat_id=chat_id, text="⏳ Processing YouTube link...")
-        await asyncio.sleep(0.1) # Brief pause for UX
+        status_message = await context.bot.send_message(chat_id=chat_id, text=f"⏳ Processing {platform_name} link...")
+        await asyncio.sleep(0.1)
 
         video_details = await youtube_service.get_video_details(url_to_process)
         title = video_details['title']
-        duration = video_details.get('duration') # Duration can be None
+        duration = video_details.get('duration')
         formats = video_details['formats']
 
-        if duration and duration > 3600 * 2: # 2 hours
+        if duration and duration > 3600 * 2:  # 2 hours
             logger.warning(f"Video {url_to_process} too long ({duration}s) for user {user.id}")
             if status_message: await status_message.edit_text("❌ Video is too long (> 2 hours).")
             return
@@ -154,8 +161,7 @@ async def handle_message(update: Update, context: CustomContext) -> None: # Use 
             if status_message: await status_message.edit_text("❌ No suitable video formats found (check resolution/availability).")
             return
 
-        caption = f"🎬 **{title}**\n\nSelect download quality:"
-        # video_id is extracted inside create_quality_options_keyboard
+        caption = f"🎬 **{title}**\n📱 *From {platform_name}*\n\nSelect download quality:"
         keyboard = create_quality_options_keyboard(url_to_process, quality_options, best_quality_option)
 
         if status_message:
@@ -163,14 +169,14 @@ async def handle_message(update: Update, context: CustomContext) -> None: # Use 
                 text=caption, parse_mode=ParseMode.MARKDOWN,
                 reply_markup=keyboard, disable_web_page_preview=True
             )
-            logger.info(f"Presented quality options for {url_to_process} to user {user.id} in message {status_message.message_id}")
-        else: # Should not happen if initial send_message succeeded
+            logger.info(f"Presented quality options for {platform_name} URL {url_to_process} to user {user.id} in message {status_message.message_id}")
+        else:
             logger.error(f"Status message was None when trying to present quality options for user {user.id}")
             await trigger_message.reply_text("Error displaying options. Please try again.", quote=True)
 
 
     except ServiceError as e:
-        error_text = f"❌ Error processing link: {e}"
+        error_text = f"❌ Error processing {platform_name} link: {e}"
         logger.error(f"ServiceError handling message for URL {url_to_process} from user {user.id}: {e}", exc_info=True)
         if status_message:
             try: await status_message.edit_text(error_text[:4000])

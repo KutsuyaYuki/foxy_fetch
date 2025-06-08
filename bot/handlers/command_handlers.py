@@ -4,11 +4,11 @@ from telegram.ext import ContextTypes, CommandHandler
 
 from bot.utils.decorators import admin_required
 from bot.presentation.keyboard import create_stats_main_menu_keyboard
-from bot.context import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext
 
 logger = logging.getLogger(__name__)
 
-async def start_command(update: Update, context: CustomContext) -> None: # Use CustomContext
+async def start_command(update: Update, context: CustomContext) -> None:
     """Sends a welcome message and logs the user interaction."""
     user = update.effective_user
     message = update.message
@@ -16,7 +16,7 @@ async def start_command(update: Update, context: CustomContext) -> None: # Use C
         logger.warning("Start command received without message or user.")
         return
 
-    db_manager = context.db_manager # Access DatabaseManager via context
+    db_manager = context.db_manager
 
     try:
         await db_manager.upsert_user(
@@ -42,12 +42,26 @@ async def start_command(update: Update, context: CustomContext) -> None: # Use C
         await message.reply_text("Sorry, an internal error occurred while processing your request.")
         return
 
-    await message.reply_html(
-        rf"Hi {user.mention_html()}! Send me a YouTube link (or reply) and I'll help you download it.",
+    welcome_text = (
+        f"Hi {user.mention_html()}! 🎉\n\n"
+        "Send me a video link from any of these platforms and I'll help you download it:\n\n"
+        "📺 **Supported Platforms:**\n"
+        "• YouTube\n"
+        "• TikTok\n"
+        "• Twitter/X\n"
+        "• Instagram\n"
+        "• Facebook\n"
+        "• Vimeo\n"
+        "• Twitch\n"
+        "• Reddit\n"
+        "• And many more!\n\n"
+        "Just paste the link or reply to a message containing one! 🚀"
     )
 
+    await message.reply_html(welcome_text)
+
 @admin_required
-async def stats_command(update: Update, context: CustomContext) -> None: # Use CustomContext
+async def stats_command(update: Update, context: CustomContext) -> None:
     """Displays the main statistics menu (admin only)."""
     message = update.message
     user = update.effective_user
@@ -55,7 +69,7 @@ async def stats_command(update: Update, context: CustomContext) -> None: # Use C
         logger.warning("Stats command received without message or user.")
         return
 
-    db_manager = context.db_manager # Access DatabaseManager via context
+    db_manager = context.db_manager
 
     try:
         await db_manager.log_interaction(
@@ -71,7 +85,6 @@ async def stats_command(update: Update, context: CustomContext) -> None: # Use C
         return
     except Exception as e:
         logger.error(f"Database error logging /stats command for admin {user.id}: {e}", exc_info=True)
-        # Do not send a message here, as the primary function might still work.
 
     text = "📊 *Bot Statistics*\nSelect a category:"
     keyboard = create_stats_main_menu_keyboard()

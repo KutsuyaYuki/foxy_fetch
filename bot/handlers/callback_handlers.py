@@ -15,7 +15,7 @@ from bot.config import MAX_UPLOAD_SIZE_BYTES, ADMIN_IDS
 from bot.services.youtube_service import YouTubeService
 from bot.exceptions import DownloaderError, ConversionError, ServiceError
 from bot.handlers.status_updater import StatusUpdater
-from bot.helpers import cleanup_file
+from bot.helpers import cleanup_file, get_platform_name  # Add this import at the top
 from bot.presentation.keyboard import (
     create_stats_main_menu_keyboard,
     create_stats_submenu_keyboard
@@ -117,9 +117,11 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
 
     try:
         try:
+            platform_name = get_platform_name(url_to_process)
             download_record_id = await db_manager.create_download_record(
-                user_id=user.id, youtube_url=url_to_process,
-                selected_quality=quality_selector, interaction_id=interaction_id
+                user_id=user.id, video_url=url_to_process,
+                selected_quality=quality_selector, platform=platform_name,
+                interaction_id=interaction_id
             )
         except Exception as e: # Includes ConnectionError
             logger.error(f"Failed to create download record for user {user.id}, URL {url_to_process}: {e}", exc_info=True)
