@@ -3,7 +3,7 @@ import asyncio
 import logging
 import os
 import re
-from typing import Optional, Tuple, Dict, Any, BinaryIO # Added BinaryIO
+from typing import Optional, Tuple, Dict, Any, BinaryIO
 from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,12 +15,13 @@ from bot.config import MAX_UPLOAD_SIZE_BYTES, ADMIN_IDS
 from bot.services.youtube_service import YouTubeService
 from bot.exceptions import DownloaderError, ConversionError, ServiceError
 from bot.handlers.status_updater import StatusUpdater
-from bot.helpers import cleanup_file, get_platform_name  # Add this import at the top
+from bot.helpers import cleanup_file, get_platform_name
 from bot.presentation.keyboard import (
     create_stats_main_menu_keyboard,
-    create_stats_submenu_keyboard
+    create_stats_submenu_keyboard,
+    resolve_callback_payload
 )
-from bot.context import CustomContext # Import CustomContext for type hinting
+from bot.context import CustomContext
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +33,15 @@ def parse_download_callback(data: str) -> Optional[Tuple[str, str]]:
             return None
         quality_selector = action_part[2:]
 
-        if payload.startswith("id:"):
-            video_id = payload[3:]
-            if not re.fullmatch(r"[0-9A-Za-z_-]{11}", video_id):
-                logger.error(f"Invalid video ID format '{video_id}' in callback_data: '{payload}'")
-                return None
-            reconstructed_url = f"https://www.youtube.com/watch?v={video_id}"
-            logger.debug(f"Reconstructed URL '{reconstructed_url}' from ID '{video_id}' for q '{quality_selector}'")
-            return quality_selector, reconstructed_url
-        else:
-            if not (payload.startswith("http://") or payload.startswith("https://")):
-                logger.warning(f"Callback payload '{payload}' doesn't look like a URL. Proceeding.")
-            return quality_selector, payload
+        try:
+            # Use the new resolve function to get the original URL
+            original_url = resolve_callback_payload(payload)
+            logger.debug(f"Resolved payload '{payload}' to URL '{original_url}' for quality '{quality_selector}'")
+            return quality_selector, original_url
+        except ValueError as e:
+            logger.error(f"Failed to resolve callback payload '{payload}': {e}")
+            return None
+
     except ValueError:
         logger.warning(f"Could not split callback data into action and payload: '{data}'")
         return None
@@ -56,12 +54,12 @@ def parse_stats_callback(data: str) -> Optional[Tuple[str, str]]:
         prefix, action = data.split(":", 1)
         if prefix not in ("stats_menu", "stats_show"): return None
         return prefix, action
-    except (ValueError, AttributeError): # AttributeError for query.data being None
+    except (ValueError, AttributeError):
         logger.warning(f"Could not parse stats callback data: {data}")
         return None
 
 
-async def handle_download_callback(update: Update, context: CustomContext) -> None: # Use CustomContext
+async def handle_download_callback(update: Update, context: CustomContext) -> None:
     query = update.callback_query
     user = update.effective_user
 
@@ -70,16 +68,16 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         if query: await query.answer("Invalid request.", show_alert=True)
         return
 
-    db_manager = context.db_manager # Access DatabaseManager via context
+    db_manager = context.db_manager
 
-    await query.answer() # Answer callback quickly
+    await query.answer()
 
     interaction_id: Optional[int] = None
     final_media_path: Optional[str] = None
     download_record_id: Optional[int] = None
-    media_file_handle: Optional[BinaryIO] = None # To store the opened file handle
-    url_to_process: Optional[str] = None # Initialize for use in except blocks if needed
-    status_updater: Optional[StatusUpdater] = None # Initialize for use in except blocks
+    media_file_handle: Optional[BinaryIO] = None
+    url_to_process: Optional[str] = None
+    status_updater: Optional[StatusUpdater] = None
 
     try:
         await db_manager.upsert_user(
@@ -96,7 +94,6 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         return
     except Exception as e:
         logger.error(f"DB error logging download callback for user {user.id}: {e}", exc_info=True)
-        # Non-critical, proceed with download if possible
 
     parsed_data = parse_download_callback(query.data)
     if not parsed_data:
@@ -106,13 +103,13 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         except (TelegramError, BadRequest): pass
         return
 
-    quality_selector, url_to_process = parsed_data # url_to_process is now defined
+    quality_selector, url_to_process = parsed_data
     chat_id = query.message.chat_id
     status_message_id = query.message.message_id
     bot = context.bot
     loop = asyncio.get_running_loop()
 
-    status_updater = StatusUpdater(bot, chat_id, status_message_id, loop) # status_updater is now defined
+    status_updater = StatusUpdater(bot, chat_id, status_message_id, loop)
     youtube_service = YouTubeService(db_manager)
 
     try:
@@ -123,7 +120,7 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
                 selected_quality=quality_selector, platform=platform_name,
                 interaction_id=interaction_id
             )
-        except Exception as e: # Includes ConnectionError
+        except Exception as e:
             logger.error(f"Failed to create download record for user {user.id}, URL {url_to_process}: {e}", exc_info=True)
             status_updater.update_status("❌ Internal error: Could not track download request.")
             return
@@ -165,7 +162,7 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         send_args: Dict[str, Any] = {"chat_id": chat_id, "caption": caption}
         base_filename = os.path.basename(final_media_path)
 
-        media_file_handle = open(final_media_path, 'rb') # Open the file and store the handle
+        media_file_handle = open(final_media_path, 'rb')
         input_file_to_send = InputFile(media_file_handle, filename=base_filename)
 
         if quality_selector == 'audio':
@@ -175,13 +172,12 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         elif quality_selector == 'gif':
             upload_method = bot.send_animation
             send_args['animation'] = input_file_to_send
-        else: # Video
+        else:
             upload_method = bot.send_video
             send_args['video'] = input_file_to_send
 
         if upload_method:
             await upload_method(**send_args)
-            # The file handle (media_file_handle) will be closed in the finally block
             logger.info(f"Uploaded {final_media_path} user {user.id}. Record: {download_record_id}")
             await db_manager.update_download_status(download_record_id, 'completed', file_size=file_size)
         else:
@@ -199,7 +195,7 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
 
     except (DownloaderError, ConversionError, ServiceError, FileNotFoundError) as e:
         err_msg = f"❌ Failed: {e}"
-        logger.error(f"Handled error for {url_to_process or 'N/A'}, user {user.id}: {e}", exc_info=True)
+        logger.error(f"Handled error for {url_to_process or 'N/A'}, user {user.id}: {e}", exc_info=isinstance(e, ServiceError))
         if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=str(e))
         if status_updater: status_updater.update_status(err_msg)
     except TelegramError as te:
@@ -214,7 +210,6 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=f"Unexpected error: {type(e).__name__}")
         if status_updater: status_updater.update_status("❌ An unexpected error occurred.")
     finally:
-        # Close the file handle if it was opened
         if media_file_handle and not media_file_handle.closed:
             try:
                 media_file_handle.close()
@@ -222,11 +217,10 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             except Exception as fh_close_err:
                 logger.error(f"Error closing media file handle: {fh_close_err}", exc_info=True)
 
-        # Cleanup the actual file from disk
         if final_media_path and os.path.exists(final_media_path):
             cleanup_file(final_media_path)
 
-async def handle_stats_callback(update: Update, context: CustomContext) -> None: # Use CustomContext
+async def handle_stats_callback(update: Update, context: CustomContext) -> None:
     """Handles button presses for the statistics interface (admin only)."""
     query = update.callback_query
     user = update.effective_user
@@ -235,14 +229,14 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
         if query: await query.answer("Invalid request.", show_alert=True)
         return
 
-    db_manager = context.db_manager # Access DatabaseManager via context
+    db_manager = context.db_manager
 
     if user.id not in ADMIN_IDS:
         logger.warning(f"Non-admin user {user.id} tried to use stats callback: {query.data}")
         await query.answer("Access Denied.", show_alert=True)
         return
 
-    await query.answer() # Answer callback quickly
+    await query.answer()
 
     try:
         await db_manager.log_interaction(
@@ -255,7 +249,6 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
         return
     except Exception as e:
         logger.error(f"Database error logging stats callback for admin {user.id}: {e}", exc_info=True)
-        # Non-critical for stats display
 
     parsed_data = parse_stats_callback(query.data)
     if not parsed_data:

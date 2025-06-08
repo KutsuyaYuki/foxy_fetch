@@ -33,14 +33,6 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     Extracts the YouTube video ID from various URL formats.
     Returns the video ID string or None if not found.
     """
-    # Patterns to match YouTube video IDs
-    # Covers:
-    # - youtube.com/watch?v=VIDEO_ID
-    # - youtu.be/VIDEO_ID
-    # - youtube.com/embed/VIDEO_ID
-    # - youtube.com/shorts/VIDEO_ID
-    # - youtube.com/live/VIDEO_ID
-    # Accounts for variations with www, http/https, and extra parameters.
     patterns = [
         r"(?:https?:\/\/)?(?:www\.)?youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/|v\/|attribution_link\?a=.*&u=\/watch\?v%3D)([0-9A-Za-z_-]{11})(?:[?&]|$)",
         r"(?:https?:\/\/)?(?:www\.)?youtu\.be\/([0-9A-Za-z_-]{11})(?:[?&]|$)"
@@ -48,8 +40,67 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     for pattern in patterns:
         match = re.search(pattern, url)
         if match:
-            return match.group(1) # Return the first capturing group (the video ID)
+            return match.group(1)
     return None
+
+def extract_tiktok_video_info(url: str) -> Optional[dict]:
+    """
+    Extracts TikTok video information for URL reconstruction.
+    Returns dict with username and video_id or None if not found.
+    """
+    # Pattern for full TikTok URLs with username and video ID
+    pattern = r"(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@([\w.-]+)\/video\/(\d+)"
+    match = re.search(pattern, url)
+    if match:
+        return {
+            'username': match.group(1),
+            'video_id': match.group(2)
+        }
+    return None
+
+def extract_twitter_tweet_id(url: str) -> Optional[str]:
+    """
+    Extracts the Twitter/X tweet ID from various URL formats.
+    Returns the tweet ID string or None if not found.
+    """
+    patterns = [
+        r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)",
+        r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/i\/web\/status\/(\d+)"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def extract_platform_id(url: str) -> Optional[str]:
+    """
+    Extracts a platform-specific ID from a URL to shorten callback data.
+    Returns the ID string or None if not extractable.
+    """
+    url_lower = url.lower()
+
+    if 'youtube.com' in url_lower or 'youtu.be' in url_lower:
+        return extract_youtube_video_id(url)
+    elif 'twitter.com' in url_lower or 'x.com' in url_lower:
+        return extract_twitter_tweet_id(url)
+    # Note: TikTok URLs are too long even with extraction, so we'll use hash method
+
+    return None
+
+def reconstruct_url_from_id(platform_id: str, platform: str) -> str:
+    """
+    Reconstructs a clean URL from platform ID and platform name.
+    """
+    platform_lower = platform.lower()
+
+    if 'youtube' in platform_lower:
+        return f"https://www.youtube.com/watch?v={platform_id}"
+    elif 'twitter' in platform_lower or 'x' in platform_lower:
+        return f"https://twitter.com/i/web/status/{platform_id}"
+
+    # For other platforms, return as-is (shouldn't happen with current logic)
+    return platform_id
 
 def get_platform_name(url: str) -> str:
     """
