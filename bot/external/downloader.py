@@ -62,21 +62,27 @@ async def download_media(
 
     format_string = None
     if quality_selector == 'audio':
-        format_string = 'bestaudio[ext=m4a]/bestaudio'
-        ydl_opts['extract_audio'] = True; ydl_opts['audio_format'] = 'm4a'
+        # More flexible audio format selection with multiple fallbacks
+        format_string = 'bestaudio/best[acodec!=none]/best'
+        ydl_opts['extract_audio'] = True
+        ydl_opts['audio_format'] = 'm4a'
+        ydl_opts['audio_quality'] = '192'
     elif quality_selector == 'gif':
-        # Download a suitable video source for GIF conversion
-        format_string = 'bestvideo[height<=480][ext=mp4]/bestvideo[height<=480]/best[height<=480]'
-        ydl_opts['merge_output_format'] = 'mp4' # Ensure source is mp4
+        # Flexible format selection for GIF conversion - just get the best available
+        format_string = 'best'
+        ydl_opts['merge_output_format'] = 'mp4'
     elif quality_selector == 'best':
+        # Try combined format first, fallback to best single format
         format_string = 'bestvideo+bestaudio/best'
     elif quality_selector.startswith('h') and quality_selector[1:].isdigit():
         height = int(quality_selector[1:])
-        format_string = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]'
+        # More flexible height-based selection with fallbacks
+        format_string = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/bestvideo[height<={height}]/best'
     else:
         raise ValueError(f"Invalid quality selector: {quality_selector}")
 
     ydl_opts['format'] = format_string
+    logger.info(f"Using format string: {format_string}")
 
     final_file_path: Optional[str] = None
     info_dict: Optional[Dict] = None
@@ -108,12 +114,20 @@ async def download_media(
                          final_file_path = found_path
                     elif found_path: # Path determined but doesn't exist? Try correcting extension.
                          base, _ = os.path.splitext(found_path)
-                         expected_ext = 'm4a' if quality_selector == 'audio' else 'mp4'
-                         corrected_path = f"{base}.{expected_ext}"
-                         if os.path.exists(corrected_path):
-                              final_file_path = corrected_path
-                         else: # Still not found, raise error earlier
-                              raise DownloaderError(f"Determined path '{found_path}' but file not found.")
+                         # Try different extensions based on quality selector
+                         if quality_selector == 'audio':
+                             extensions = ['m4a', 'mp3', 'aac', 'ogg', 'wav']
+                         else:
+                             extensions = ['mp4', 'webm', 'mkv', 'avi', 'mov', 'flv']
+
+                         for ext in extensions:
+                             corrected_path = f"{base}.{ext}"
+                             if os.path.exists(corrected_path):
+                                 final_file_path = corrected_path
+                                 break
+
+                         if not final_file_path:
+                             raise DownloaderError(f"Determined path '{found_path}' but file not found with any extension.")
                     else: # Should not happen if download succeeded
                         raise DownloaderError("yt-dlp finished, but could not determine file path.")
 
