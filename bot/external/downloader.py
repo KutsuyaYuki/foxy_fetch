@@ -26,7 +26,6 @@ async def get_video_info(url: str) -> Dict:
         'force_generic_extractor': False,
         'cookiefile': cookie_path,
         'age_limit': None,  # Disable age restrictions
-        'format': 'best',  # Specify a default format for info extraction
         'no_warnings': True
     }
     try:
