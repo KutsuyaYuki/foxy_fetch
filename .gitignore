@@ -3,7 +3,6 @@ venv
 .env
 *.pyc
 
-*.txt
 *.log
 *.db*
 *.cmd
