@@ -18,11 +18,14 @@ logging.getLogger("yt_dlp").setLevel(logging.WARNING)
 
 async def get_video_info(url: str) -> Dict:
     """Fetches video information including formats using yt-dlp."""
+    cookie_path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(__file__))), 'cookies.firefox-private.txt')
     ydl_opts = {
         'quiet': True,
         'skip_download': True,
         'force_generic_extractor': False,
-        'cookiefile': 'cookies.firefox-private.txt'
+        'cookiefile': cookie_path,
+        'age_limit': None  # Disable age restrictions
     }
     try:
         logger.info(f"Fetching video info for {url}")
@@ -62,6 +65,8 @@ async def download_media(
     Does NOT perform GIF conversion.
     """
     output_template = os.path.join(DOWNLOAD_DIR, '%(title)s [%(id)s].%(ext)s')
+    cookie_path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(__file__))), 'cookies.firefox-private.txt')
 
     ydl_opts = {
         'outtmpl': output_template,
@@ -71,7 +76,8 @@ async def download_media(
         'progress_hooks': [progress_hook] if progress_hook else [],
         'noprogress': True,
         'merge_output_format': 'mp4',  # Keep default merge format
-        'cookiefile': 'cookies.firefox-private.txt'
+        'cookiefile': cookie_path,
+        'age_limit': None  # Disable age restrictions
     }
 
     format_string = None
