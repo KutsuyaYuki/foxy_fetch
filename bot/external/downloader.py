@@ -26,7 +26,8 @@ async def get_video_info(url: str) -> Dict:
         'force_generic_extractor': False,
         'cookiefile': cookie_path,
         'age_limit': None,  # Disable age restrictions
-        'no_warnings': True
+        'no_warnings': True,
+        'noplaylist': True  # Extract single video even if URL contains playlist
     }
     try:
         logger.info(f"Fetching video info for {url}")
