@@ -25,7 +25,9 @@ async def get_video_info(url: str) -> Dict:
         'skip_download': True,
         'force_generic_extractor': False,
         'cookiefile': cookie_path,
-        'age_limit': None  # Disable age restrictions
+        'age_limit': None,  # Disable age restrictions
+        'format': 'best',  # Specify a default format for info extraction
+        'no_warnings': True
     }
     try:
         logger.info(f"Fetching video info for {url}")
