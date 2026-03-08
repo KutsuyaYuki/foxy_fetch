@@ -126,8 +126,7 @@ def create_quality_options_keyboard(
         keyboard.append([
             InlineKeyboardButton(
                 label,
-                callback_data=f"q_{option.get('selector', f'h{height}')}:{
-                    callback_payload}"
+                callback_data=f"q_{option.get('selector', f'h{height}')}:{callback_payload}"
             )
         ])
         processed_heights.add(height)
