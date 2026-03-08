@@ -17,13 +17,15 @@ from .utils import parse_download_callback
 
 logger = logging.getLogger(__name__)
 
+
 async def handle_download_callback(update: Update, context: CustomContext) -> None:
     """Handle download quality selection callbacks."""
     query = update.callback_query
     user = update.effective_user
 
     if not query or not query.message or not context.bot or not query.data or not user:
-        logger.warning("Download callback received invalid data or missing components.")
+        logger.warning(
+            "Download callback received invalid data or missing components.")
         if query:
             await query.answer("Invalid request.", show_alert=True)
         return
@@ -55,7 +57,8 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         # Initialize components
         chat_id = query.message.chat_id
         status_message_id = query.message.message_id
-        status_updater = StatusUpdater(context.bot, chat_id, status_message_id, asyncio.get_running_loop())
+        status_updater = StatusUpdater(
+            context.bot, chat_id, status_message_id, asyncio.get_running_loop())
         youtube_service = YouTubeService(db_manager)
 
         # Create download record
@@ -63,7 +66,8 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             db_manager, user.id, url_to_process, quality_selector, interaction_id
         )
         if not download_record_id:
-            status_updater.update_status("❌ Internal error: Failed to track download ID.")
+            status_updater.update_status(
+                "❌ Internal error: Failed to track download ID.")
             return
 
         # Process and download
@@ -95,12 +99,15 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         await _cleanup_resources(media_file_handle, final_media_path)
 
 # Helper functions
+
+
 async def _log_user_interaction(db_manager, user, query):
     """Log user information."""
     await db_manager.upsert_user(
         user_id=user.id, username=user.username,
         first_name=user.first_name, last_name=user.last_name
     )
+
 
 async def _log_callback_interaction(db_manager, user, query) -> Optional[int]:
     """Log callback interaction and return interaction ID."""
@@ -109,6 +116,7 @@ async def _log_callback_interaction(db_manager, user, query) -> Optional[int]:
         message_id=query.message.message_id,
         interaction_type='callback_query', content=query.data
     )
+
 
 async def _handle_invalid_callback(bot, query):
     """Handle invalid callback data."""
@@ -122,6 +130,7 @@ async def _handle_invalid_callback(bot, query):
     except (TelegramError, BadRequest):
         pass
 
+
 async def _create_download_record(db_manager, user_id, url, quality_selector, interaction_id) -> Optional[int]:
     """Create download record and return record ID."""
     try:
@@ -132,13 +141,16 @@ async def _create_download_record(db_manager, user_id, url, quality_selector, in
             interaction_id=interaction_id
         )
     except Exception as e:
-        logger.error(f"Failed to create download record for user {user_id}, URL {url}: {e}", exc_info=True)
+        logger.error(
+            f"Failed to create download record for user {user_id}, URL {url}: {e}", exc_info=True)
         return None
+
 
 async def _upload_media_file(bot, chat_id, file_path, title, description, url, quality_selector, db_manager, record_id, status_updater):
     """Handle media file upload."""
     if not file_path or not os.path.exists(file_path):
-        raise ServiceError("Processed media file not found after download/conversion.")
+        raise ServiceError(
+            "Processed media file not found after download/conversion.")
 
     file_size = os.path.getsize(file_path)
     caption = f"{title}\n\nQuality: {description}\nSource: {url}"
@@ -147,7 +159,7 @@ async def _upload_media_file(bot, chat_id, file_path, title, description, url, q
         max_mb = MAX_UPLOAD_SIZE_BYTES / (1024*1024)
         size_error_text = f"❌ File too large ({file_size / (1024*1024):.2f} MB). Max: {max_mb:.0f} MB."
         await db_manager.update_download_status(record_id, 'failed',
-            error_message=f"File too large ({file_size} bytes)", file_size=file_size)
+                                                error_message=f"File too large ({file_size} bytes)", file_size=file_size)
         status_updater.update_status(size_error_text)
         return
 
@@ -164,7 +176,9 @@ async def _upload_media_file(bot, chat_id, file_path, title, description, url, q
         await db_manager.update_download_status(record_id, 'completed', file_size=file_size)
         logger.info(f"Upload successful for record {record_id}")
     else:
-        raise ServiceError(f"No upload method determined for selector '{quality_selector}'.")
+        raise ServiceError(
+            f"No upload method determined for selector '{quality_selector}'.")
+
 
 def _get_upload_method_and_args(bot, chat_id, file_path, title, caption, quality_selector):
     """Get the appropriate upload method and arguments."""
@@ -174,12 +188,13 @@ def _get_upload_method_and_args(bot, chat_id, file_path, title, caption, quality
 
     send_args = {"chat_id": chat_id, "caption": caption}
 
-    if quality_selector == 'audio':
+    if quality_selector in ('audio', 'mp3'):
         return bot.send_audio, {**send_args, 'audio': input_file, 'title': title}
     elif quality_selector == 'gif':
         return bot.send_animation, {**send_args, 'animation': input_file}
     else:
         return bot.send_video, {**send_args, 'video': input_file}
+
 
 async def _cleanup_status_message(bot, chat_id, message_id, user_id):
     """Clean up the status message."""
@@ -188,21 +203,25 @@ async def _cleanup_status_message(bot, chat_id, message_id, user_id):
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
         logger.info(f"Deleted status message {message_id} for user {user_id}")
     except TelegramError as del_e:
-        logger.warning(f"Could not delete status message {message_id}: {del_e}")
+        logger.warning(
+            f"Could not delete status message {message_id}: {del_e}")
+
 
 async def _handle_service_error(error, record_id, db_manager, status_updater, user_id, url):
     """Handle service-related errors."""
     err_msg = f"❌ Failed: {error}"
     logger.error(f"Handled error for {url or 'N/A'}, user {user_id}: {error}",
-                exc_info=isinstance(error, ServiceError))
+                 exc_info=isinstance(error, ServiceError))
     if record_id:
         await db_manager.update_download_status(record_id, 'failed', error_message=str(error))
     if status_updater:
         status_updater.update_status(err_msg)
 
+
 async def _handle_telegram_error(error, record_id, db_manager, status_updater, user_id):
     """Handle Telegram API errors."""
-    logger.error(f"TelegramError during callback for user {user_id}: {error}", exc_info=True)
+    logger.error(
+        f"TelegramError during callback for user {user_id}: {error}", exc_info=True)
     error_text = f"❌ Telegram Error: {error.message}"
     if isinstance(error, NetworkError) and "timed out" in str(error).lower():
         error_text = "❌ Upload failed: Connection timed out."
@@ -211,13 +230,16 @@ async def _handle_telegram_error(error, record_id, db_manager, status_updater, u
     if status_updater:
         status_updater.update_status(error_text)
 
+
 async def _handle_unexpected_error(error, record_id, db_manager, status_updater, user_id, url):
     """Handle unexpected errors."""
-    logger.exception(f"Unexpected error in download callback for {url or 'N/A'}, user {user_id}")
+    logger.exception(
+        f"Unexpected error in download callback for {url or 'N/A'}, user {user_id}")
     if record_id:
         await db_manager.update_download_status(record_id, 'failed', error_message=f"Unexpected error: {type(error).__name__}")
     if status_updater:
         status_updater.update_status("❌ An unexpected error occurred.")
+
 
 async def _cleanup_resources(media_file_handle, final_media_path):
     """Clean up file handles and temporary files."""
@@ -226,9 +248,11 @@ async def _cleanup_resources(media_file_handle, final_media_path):
             media_file_handle.close()
             logger.debug(f"Closed media file handle")
         except Exception as e:
-            logger.error(f"Error closing media file handle: {e}", exc_info=True)
+            logger.error(
+                f"Error closing media file handle: {e}", exc_info=True)
 
     if final_media_path and os.path.exists(final_media_path):
         cleanup_file(final_media_path)
 
-download_callback_handler = CallbackQueryHandler(handle_download_callback, pattern=r"^q_.*")
+download_callback_handler = CallbackQueryHandler(
+    handle_download_callback, pattern=r"^q_.*")

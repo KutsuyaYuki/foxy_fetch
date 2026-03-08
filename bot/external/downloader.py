@@ -27,7 +27,8 @@ async def get_video_info(url: str) -> Dict:
         'cookiefile': cookie_path,
         'age_limit': None,  # Disable age restrictions
         'no_warnings': True,
-        'noplaylist': True  # Extract single video even if URL contains playlist
+        'noplaylist': True,  # Extract single video even if URL contains playlist
+        'extractor_args': {'youtube': {'player_client': ['all']}}
     }
     try:
         logger.info(f"Fetching video info for {url}")
@@ -79,7 +80,8 @@ async def download_media(
         'noprogress': True,
         'merge_output_format': 'mp4',  # Keep default merge format
         'cookiefile': cookie_path,
-        'age_limit': None  # Disable age restrictions
+        'age_limit': None,  # Disable age restrictions
+        'extractor_args': {'youtube': {'player_client': ['all']}}
     }
 
     format_string = None
@@ -89,6 +91,16 @@ async def download_media(
         ydl_opts['extract_audio'] = True
         ydl_opts['audio_format'] = 'm4a'
         ydl_opts['audio_quality'] = '192'
+    elif quality_selector == 'mp3':
+        format_string = 'bestaudio/best[acodec!=none]/best'
+        ydl_opts['extract_audio'] = True
+        ydl_opts['audio_format'] = 'mp3'
+        ydl_opts['audio_quality'] = '192'
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
     elif quality_selector == 'gif':
         # Flexible format selection for GIF conversion - just get the best available
         format_string = 'best'
@@ -142,6 +154,8 @@ async def download_media(
                         # Try different extensions based on quality selector
                         if quality_selector == 'audio':
                             extensions = ['m4a', 'mp3', 'aac', 'ogg', 'wav']
+                        elif quality_selector == 'mp3':
+                            extensions = ['mp3']
                         else:
                             extensions = ['mp4', 'webm',
                                           'mkv', 'avi', 'mov', 'flv']

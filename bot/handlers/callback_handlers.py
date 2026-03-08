@@ -25,34 +25,42 @@ from bot.context import CustomContext
 
 logger = logging.getLogger(__name__)
 
+
 def parse_download_callback(data: str) -> Optional[Tuple[str, str]]:
     try:
         action_part, payload = data.split(":", 1)
         if not action_part.startswith("q_"):
-            logger.warning(f"Callback data '{data}' is not a download action (no 'q_' prefix).")
+            logger.warning(
+                f"Callback data '{data}' is not a download action (no 'q_' prefix).")
             return None
         quality_selector = action_part[2:]
 
         try:
             # Use the new resolve function to get the original URL
             original_url = resolve_callback_payload(payload)
-            logger.debug(f"Resolved payload '{payload}' to URL '{original_url}' for quality '{quality_selector}'")
+            logger.debug(
+                f"Resolved payload '{payload}' to URL '{original_url}' for quality '{quality_selector}'")
             return quality_selector, original_url
         except ValueError as e:
-            logger.error(f"Failed to resolve callback payload '{payload}': {e}")
+            logger.error(
+                f"Failed to resolve callback payload '{payload}': {e}")
             return None
 
     except ValueError:
-        logger.warning(f"Could not split callback data into action and payload: '{data}'")
+        logger.warning(
+            f"Could not split callback data into action and payload: '{data}'")
         return None
     except Exception as e:
-        logger.error(f"Unexpected error parsing download callback data '{data}': {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error parsing download callback data '{data}': {e}", exc_info=True)
         return None
+
 
 def parse_stats_callback(data: str) -> Optional[Tuple[str, str]]:
     try:
         prefix, action = data.split(":", 1)
-        if prefix not in ("stats_menu", "stats_show"): return None
+        if prefix not in ("stats_menu", "stats_show"):
+            return None
         return prefix, action
     except (ValueError, AttributeError):
         logger.warning(f"Could not parse stats callback data: {data}")
@@ -64,8 +72,10 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
     user = update.effective_user
 
     if not query or not query.message or not context.bot or not query.data or not user:
-        logger.warning("Download callback received invalid data or missing components.")
-        if query: await query.answer("Invalid request.", show_alert=True)
+        logger.warning(
+            "Download callback received invalid data or missing components.")
+        if query:
+            await query.answer("Invalid request.", show_alert=True)
         return
 
     db_manager = context.db_manager
@@ -89,18 +99,22 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             message_id=query.message.message_id, interaction_type='callback_query', content=query.data
         )
     except ConnectionError as ce:
-        logger.error(f"DB connection error in download callback for user {user.id}: {ce}")
+        logger.error(
+            f"DB connection error in download callback for user {user.id}: {ce}")
         await query.edit_message_text("❌ Internal Error (DB Connection). Please try again later.")
         return
     except Exception as e:
-        logger.error(f"DB error logging download callback for user {user.id}: {e}", exc_info=True)
+        logger.error(
+            f"DB error logging download callback for user {user.id}: {e}", exc_info=True)
 
     parsed_data = parse_download_callback(query.data)
     if not parsed_data:
-        logger.error(f"Invalid download callback data: {query.data} from user {user.id}.")
+        logger.error(
+            f"Invalid download callback data: {query.data} from user {user.id}.")
         try:
             await context.bot.edit_message_text("❌ Invalid request format.", chat_id=query.message.chat_id, message_id=query.message.message_id)
-        except (TelegramError, BadRequest): pass
+        except (TelegramError, BadRequest):
+            pass
         return
 
     quality_selector, url_to_process = parsed_data
@@ -121,13 +135,17 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
                 interaction_id=interaction_id
             )
         except Exception as e:
-            logger.error(f"Failed to create download record for user {user.id}, URL {url_to_process}: {e}", exc_info=True)
-            status_updater.update_status("❌ Internal error: Could not track download request.")
+            logger.error(
+                f"Failed to create download record for user {user.id}, URL {url_to_process}: {e}", exc_info=True)
+            status_updater.update_status(
+                "❌ Internal error: Could not track download request.")
             return
 
         if not download_record_id:
-            logger.error(f"Download record ID is None after creation for user {user.id}, URL {url_to_process}")
-            status_updater.update_status("❌ Internal error: Failed to track download ID.")
+            logger.error(
+                f"Download record ID is None after creation for user {user.id}, URL {url_to_process}")
+            status_updater.update_status(
+                "❌ Internal error: Failed to track download ID.")
             return
 
         final_media_path, file_title, choice_description = await youtube_service.process_and_download(
@@ -137,7 +155,8 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
             status_callback=status_updater.update_status
         )
 
-        status_updater.update_status("✅ Processing complete! Preparing upload...")
+        status_updater.update_status(
+            "✅ Processing complete! Preparing upload...")
 
         if not final_media_path or not os.path.exists(final_media_path):
             err_msg = "Processed media file not found after download/conversion."
@@ -150,7 +169,8 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         if file_size > MAX_UPLOAD_SIZE_BYTES:
             max_mb = MAX_UPLOAD_SIZE_BYTES / (1024*1024)
             size_error_text = f"❌ File too large ({file_size / (1024*1024):.2f} MB). Max: {max_mb:.0f} MB."
-            logger.warning(f"File {final_media_path} too large for user {user.id}. Record: {download_record_id}")
+            logger.warning(
+                f"File {final_media_path} too large for user {user.id}. Record: {download_record_id}")
             await db_manager.update_download_status(download_record_id, 'failed', error_message=f"File too large ({file_size} bytes)", file_size=file_size)
             status_updater.update_status(size_error_text)
             return
@@ -163,9 +183,10 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         base_filename = os.path.basename(final_media_path)
 
         media_file_handle = open(final_media_path, 'rb')
-        input_file_to_send = InputFile(media_file_handle, filename=base_filename)
+        input_file_to_send = InputFile(
+            media_file_handle, filename=base_filename)
 
-        if quality_selector == 'audio':
+        if quality_selector in ('audio', 'mp3'):
             upload_method = bot.send_audio
             send_args['audio'] = input_file_to_send
             send_args['title'] = file_title
@@ -178,7 +199,8 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
 
         if upload_method:
             await upload_method(**send_args)
-            logger.info(f"Uploaded {final_media_path} user {user.id}. Record: {download_record_id}")
+            logger.info(
+                f"Uploaded {final_media_path} user {user.id}. Record: {download_record_id}")
             await db_manager.update_download_status(download_record_id, 'completed', file_size=file_size)
         else:
             err_msg = f"No upload method determined for selector '{quality_selector}'."
@@ -188,51 +210,68 @@ async def handle_download_callback(update: Update, context: CustomContext) -> No
         try:
             await asyncio.sleep(0.5)
             await bot.delete_message(chat_id=chat_id, message_id=status_message_id)
-            logger.info(f"Deleted status message {status_message_id} for user {user.id}")
+            logger.info(
+                f"Deleted status message {status_message_id} for user {user.id}")
         except TelegramError as del_e:
-            logger.warning(f"Could not delete status message {status_message_id}: {del_e}")
+            logger.warning(
+                f"Could not delete status message {status_message_id}: {del_e}")
             status_updater.update_status("🎉 File sent successfully!")
 
     except (DownloaderError, ConversionError, ServiceError, FileNotFoundError) as e:
         err_msg = f"❌ Failed: {e}"
-        logger.error(f"Handled error for {url_to_process or 'N/A'}, user {user.id}: {e}", exc_info=isinstance(e, ServiceError))
-        if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=str(e))
-        if status_updater: status_updater.update_status(err_msg)
+        logger.error(
+            f"Handled error for {url_to_process or 'N/A'}, user {user.id}: {e}", exc_info=isinstance(e, ServiceError))
+        if download_record_id:
+            await db_manager.update_download_status(download_record_id, 'failed', error_message=str(e))
+        if status_updater:
+            status_updater.update_status(err_msg)
     except TelegramError as te:
-        logger.error(f"TelegramError during callback for user {user.id}: {te}", exc_info=True)
+        logger.error(
+            f"TelegramError during callback for user {user.id}: {te}", exc_info=True)
         error_text = f"❌ Telegram Error: {te.message}"
         if isinstance(te, NetworkError) and "timed out" in str(te).lower():
-             error_text = f"❌ Upload failed: Connection timed out."
-        if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=f"TelegramError: {te.message}")
-        if status_updater: status_updater.update_status(error_text)
+            error_text = f"❌ Upload failed: Connection timed out."
+        if download_record_id:
+            await db_manager.update_download_status(download_record_id, 'failed', error_message=f"TelegramError: {te.message}")
+        if status_updater:
+            status_updater.update_status(error_text)
     except Exception as e:
-        logger.exception(f"Unexpected error in download callback for {url_to_process or 'N/A'}, user {user.id}")
-        if download_record_id: await db_manager.update_download_status(download_record_id, 'failed', error_message=f"Unexpected error: {type(e).__name__}")
-        if status_updater: status_updater.update_status("❌ An unexpected error occurred.")
+        logger.exception(
+            f"Unexpected error in download callback for {url_to_process or 'N/A'}, user {user.id}")
+        if download_record_id:
+            await db_manager.update_download_status(download_record_id, 'failed', error_message=f"Unexpected error: {type(e).__name__}")
+        if status_updater:
+            status_updater.update_status("❌ An unexpected error occurred.")
     finally:
         if media_file_handle and not media_file_handle.closed:
             try:
                 media_file_handle.close()
-                logger.debug(f"Closed media file handle for '{final_media_path if final_media_path else 'N/A'}'")
+                logger.debug(
+                    f"Closed media file handle for '{final_media_path if final_media_path else 'N/A'}'")
             except Exception as fh_close_err:
-                logger.error(f"Error closing media file handle: {fh_close_err}", exc_info=True)
+                logger.error(
+                    f"Error closing media file handle: {fh_close_err}", exc_info=True)
 
         if final_media_path and os.path.exists(final_media_path):
             cleanup_file(final_media_path)
+
 
 async def handle_stats_callback(update: Update, context: CustomContext) -> None:
     """Handles button presses for the statistics interface (admin only)."""
     query = update.callback_query
     user = update.effective_user
     if not query or not query.message or not query.data or not user:
-        logger.warning("Stats callback received invalid data or missing components.")
-        if query: await query.answer("Invalid request.", show_alert=True)
+        logger.warning(
+            "Stats callback received invalid data or missing components.")
+        if query:
+            await query.answer("Invalid request.", show_alert=True)
         return
 
     db_manager = context.db_manager
 
     if user.id not in ADMIN_IDS:
-        logger.warning(f"Non-admin user {user.id} tried to use stats callback: {query.data}")
+        logger.warning(
+            f"Non-admin user {user.id} tried to use stats callback: {query.data}")
         await query.answer("Access Denied.", show_alert=True)
         return
 
@@ -244,17 +283,22 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
             message_id=query.message.message_id, interaction_type='callback_query', content=query.data
         )
     except ConnectionError as ce:
-        logger.error(f"DB connection error logging stats callback for admin {user.id}: {ce}")
+        logger.error(
+            f"DB connection error logging stats callback for admin {user.id}: {ce}")
         await query.edit_message_text("❌ Internal Error (DB Connection). Please try again later.")
         return
     except Exception as e:
-        logger.error(f"Database error logging stats callback for admin {user.id}: {e}", exc_info=True)
+        logger.error(
+            f"Database error logging stats callback for admin {user.id}: {e}", exc_info=True)
 
     parsed_data = parse_stats_callback(query.data)
     if not parsed_data:
-        logger.error(f"Invalid stats callback data format: {query.data} from admin {user.id}")
-        try: await query.edit_message_text("❌ Invalid stats request format.")
-        except (TelegramError, BadRequest): pass
+        logger.error(
+            f"Invalid stats callback data format: {query.data} from admin {user.id}")
+        try:
+            await query.edit_message_text("❌ Invalid stats request format.")
+        except (TelegramError, BadRequest):
+            pass
         return
 
     menu_type, action = parsed_data
@@ -291,7 +335,8 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 completed_downloads = status_counts.get('completed', 0)
                 failed_downloads = status_counts.get('failed', 0)
                 total_dl_attempts = sum(status_counts.values())
-                success_rate = (completed_downloads / total_dl_attempts * 100) if total_dl_attempts > 0 else 0.0
+                success_rate = (
+                    completed_downloads / total_dl_attempts * 100) if total_dl_attempts > 0 else 0.0
 
                 text += "📊 *Overall Summary*\n"
                 text += f"- Total Users: `{total_users}`\n"
@@ -300,7 +345,8 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 text += f"- Completed Downloads: `{completed_downloads}` ✅\n"
                 text += f"- Failed Downloads: `{failed_downloads}` ❌\n"
                 text += f"- Success Rate: `{success_rate:.2f}%`\n"
-                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("« Back to Main Menu", callback_data="stats_menu:main")]])
+                keyboard = InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("« Back to Main Menu", callback_data="stats_menu:main")]])
 
             elif action == "users_total":
                 count = await db_manager.get_total_user_count()
@@ -321,7 +367,8 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 if counts:
                     for type_name, count_val in sorted(counts.items()):
                         text += f"- {type_name.replace('_', ' ').title()}: `{count_val}`\n"
-                else: text += "_No interactions recorded._\n"
+                else:
+                    text += "_No interactions recorded._\n"
                 keyboard = create_stats_submenu_keyboard("interactions")
             elif action == "interactions_24h":
                 counts = await db_manager.get_interaction_count_by_type(since_iso_timestamp=one_day_ago_iso)
@@ -329,7 +376,8 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 if counts:
                     for type_name, count_val in sorted(counts.items()):
                         text += f"- {type_name.replace('_', ' ').title()}: `{count_val}`\n"
-                else: text += "_No interactions in the last 24 hours._\n"
+                else:
+                    text += "_No interactions in the last 24 hours._\n"
                 keyboard = create_stats_submenu_keyboard("interactions")
 
             elif action == "downloads_by_status":
@@ -338,7 +386,8 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 if counts:
                     for status_name, count_val in sorted(counts.items()):
                         text += f"- {status_name.title()}: `{count_val}`\n"
-                else: text += "_No downloads recorded._\n"
+                else:
+                    text += "_No downloads recorded._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
             elif action == "downloads_by_quality":
                 counts = await db_manager.get_downloads_by_quality_summary()
@@ -346,16 +395,19 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
                 if counts:
                     for quality_name, count_val in sorted(counts.items()):
                         text += f"- {quality_name.replace('h', '').upper() if quality_name.startswith('h') else quality_name.title()}: `{count_val}`\n"
-                else: text += "_No completed downloads recorded._\n"
+                else:
+                    text += "_No completed downloads recorded._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
             elif action == "downloads_top_urls":
                 urls = await db_manager.get_top_requested_urls(limit=5)
                 text += "📥 *Top 5 Requested URLs*\n"
                 if urls:
                     for i, (url_item, count_val) in enumerate(urls):
-                        display_url = url_item[:60] + '...' if len(url_item) > 60 else url_item
+                        display_url = url_item[:60] + \
+                            '...' if len(url_item) > 60 else url_item
                         text += f"{i+1}. `{display_url}` (Count: `{count_val}`)\n"
-                else: text += "_No URLs requested yet._\n"
+                else:
+                    text += "_No URLs requested yet._\n"
                 keyboard = create_stats_submenu_keyboard("downloads")
             else:
                 logger.warning(f"Unknown stats show action: {action}")
@@ -369,14 +421,19 @@ async def handle_stats_callback(update: Update, context: CustomContext) -> None:
         await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
     except ConnectionError as ce:
-        logger.error(f"DB connection error handling stats callback action '{action}' for admin {user.id}: {ce}")
+        logger.error(
+            f"DB connection error handling stats callback action '{action}' for admin {user.id}: {ce}")
         await query.edit_message_text("❌ A database connection error occurred while fetching statistics.")
     except Exception as e:
-        logger.exception(f"Error handling stats callback action '{action}' for admin {user.id}")
+        logger.exception(
+            f"Error handling stats callback action '{action}' for admin {user.id}")
         try:
             await query.edit_message_text("❌ An error occurred while fetching statistics.")
-        except (TelegramError, BadRequest): pass
+        except (TelegramError, BadRequest):
+            pass
 
-download_callback_handler = CallbackQueryHandler(handle_download_callback, pattern=r"^q_.*")
-stats_callback_handler = CallbackQueryHandler(handle_stats_callback, pattern=r"^stats_(menu|show):.*")
+download_callback_handler = CallbackQueryHandler(
+    handle_download_callback, pattern=r"^q_.*")
+stats_callback_handler = CallbackQueryHandler(
+    handle_stats_callback, pattern=r"^stats_(menu|show):.*")
 callback_handlers = [download_callback_handler, stats_callback_handler]

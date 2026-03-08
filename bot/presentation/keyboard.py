@@ -9,12 +9,20 @@ from bot.helpers import extract_platform_id, get_platform_name
 logger = logging.getLogger(__name__)
 
 # format_filesize function (unchanged)
+
+
 def format_filesize(size_bytes: Optional[int]) -> str:
-    if not size_bytes: return ""
-    if size_bytes < 1024: return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024: return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024: return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else: return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+    if not size_bytes:
+        return ""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
 
 def create_callback_payload(video_url: str) -> str:
     """
@@ -32,7 +40,8 @@ def create_callback_payload(video_url: str) -> str:
 
             # Check if it fits within reasonable limit
             if len(payload) <= 45:  # Max 64 - "q_best:" (7 chars) - buffer
-                logger.debug(f"Using platform ID payload for {platform_name}: {payload}")
+                logger.debug(
+                    f"Using platform ID payload for {platform_name}: {payload}")
                 return payload
 
     # For TikTok and other platforms, always use hash method
@@ -45,8 +54,10 @@ def create_callback_payload(video_url: str) -> str:
 
     return payload
 
+
 # Simple in-memory cache for URL hashes (in production, use Redis or database)
 _url_cache: Dict[str, str] = {}
+
 
 def resolve_callback_payload(payload: str) -> str:
     """
@@ -72,17 +83,19 @@ def resolve_callback_payload(payload: str) -> str:
             return f"https://twitter.com/i/web/status/{platform_id}"
         else:
             logger.warning(f"Unknown platform in payload: {platform}")
-            raise ValueError(f"Unknown platform in callback payload: {platform}")
+            raise ValueError(
+                f"Unknown platform in callback payload: {platform}")
 
     # If no special format, this shouldn't happen
     logger.error(f"Unrecognized callback payload format: {payload}")
     raise ValueError(f"Invalid callback payload format: {payload}")
 
+
 def create_quality_options_keyboard(
     video_url: str,
     quality_options: List[Dict[str, Any]],
     best_quality_option: Dict[str, Any]
-    ) -> InlineKeyboardMarkup:
+) -> InlineKeyboardMarkup:
     keyboard: List[List[InlineKeyboardButton]] = []
 
     try:
@@ -113,53 +126,73 @@ def create_quality_options_keyboard(
         keyboard.append([
             InlineKeyboardButton(
                 label,
-                callback_data=f"q_{option.get('selector', f'h{height}')}:{callback_payload}"
+                callback_data=f"q_{option.get('selector', f'h{height}')}:{
+                    callback_payload}"
             )
         ])
         processed_heights.add(height)
 
     # Add Audio Only option
     keyboard.append([
-        InlineKeyboardButton("🎵 Audio Only (m4a)", callback_data=f"q_audio:{callback_payload}")
+        InlineKeyboardButton("🎵 Audio Only (m4a)",
+                             callback_data=f"q_audio:{callback_payload}"),
+        InlineKeyboardButton("🎧 Audio Only (mp3)",
+                             callback_data=f"q_mp3:{callback_payload}")
     ])
 
     # Add GIF option
     keyboard.append([
-        InlineKeyboardButton("✨ Create GIF (Full Video)", callback_data=f"q_gif:{callback_payload}")
+        InlineKeyboardButton("✨ Create GIF (Full Video)",
+                             callback_data=f"q_gif:{callback_payload}")
     ])
 
     return InlineKeyboardMarkup(keyboard)
 
 # --- Stats Keyboards (unchanged) ---
 
+
 def create_stats_main_menu_keyboard() -> InlineKeyboardMarkup:
     """Creates the main menu keyboard for the /stats command."""
     keyboard = [
         [
-            InlineKeyboardButton("👤 User Statistics", callback_data="stats_menu:users"),
-            InlineKeyboardButton("💬 Interaction Stats", callback_data="stats_menu:interactions"),
+            InlineKeyboardButton("👤 User Statistics",
+                                 callback_data="stats_menu:users"),
+            InlineKeyboardButton("💬 Interaction Stats",
+                                 callback_data="stats_menu:interactions"),
         ],
         [
-            InlineKeyboardButton("📥 Download Statistics", callback_data="stats_menu:downloads"),
-            InlineKeyboardButton("📊 Overall Summary", callback_data="stats_show:summary"),
+            InlineKeyboardButton("📥 Download Statistics",
+                                 callback_data="stats_menu:downloads"),
+            InlineKeyboardButton("📊 Overall Summary",
+                                 callback_data="stats_show:summary"),
         ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
+
 def create_stats_submenu_keyboard(current_menu: str) -> InlineKeyboardMarkup:
     """Creates a submenu keyboard with a back button."""
     keyboard = [
-        [InlineKeyboardButton("« Back to Main Menu", callback_data="stats_menu:main")]
+        [InlineKeyboardButton("« Back to Main Menu",
+                              callback_data="stats_menu:main")]
     ]
     if current_menu == "users":
-         keyboard.insert(0, [InlineKeyboardButton("Total Users", callback_data="stats_show:users_total")])
-         keyboard.insert(1, [InlineKeyboardButton("Active Users (24h)", callback_data="stats_show:users_active_24h")])
-         keyboard.insert(2, [InlineKeyboardButton("Active Users (7d)", callback_data="stats_show:users_active_7d")])
+        keyboard.insert(0, [InlineKeyboardButton(
+            "Total Users", callback_data="stats_show:users_total")])
+        keyboard.insert(1, [InlineKeyboardButton(
+            "Active Users (24h)", callback_data="stats_show:users_active_24h")])
+        keyboard.insert(2, [InlineKeyboardButton(
+            "Active Users (7d)", callback_data="stats_show:users_active_7d")])
     elif current_menu == "interactions":
-         keyboard.insert(0, [InlineKeyboardButton("Total by Type", callback_data="stats_show:interactions_by_type")])
-         keyboard.insert(1, [InlineKeyboardButton("Interactions (24h)", callback_data="stats_show:interactions_24h")])
+        keyboard.insert(0, [InlineKeyboardButton(
+            "Total by Type", callback_data="stats_show:interactions_by_type")])
+        keyboard.insert(1, [InlineKeyboardButton(
+            "Interactions (24h)", callback_data="stats_show:interactions_24h")])
     elif current_menu == "downloads":
-         keyboard.insert(0, [InlineKeyboardButton("Count by Status", callback_data="stats_show:downloads_by_status")])
-         keyboard.insert(1, [InlineKeyboardButton("Completed by Quality", callback_data="stats_show:downloads_by_quality")])
-         keyboard.insert(2, [InlineKeyboardButton("Top 5 URLs", callback_data="stats_show:downloads_top_urls")])
+        keyboard.insert(0, [InlineKeyboardButton(
+            "Count by Status", callback_data="stats_show:downloads_by_status")])
+        keyboard.insert(1, [InlineKeyboardButton(
+            "Completed by Quality", callback_data="stats_show:downloads_by_quality")])
+        keyboard.insert(2, [InlineKeyboardButton(
+            "Top 5 URLs", callback_data="stats_show:downloads_top_urls")])
     return InlineKeyboardMarkup(keyboard)
